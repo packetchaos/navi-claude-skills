@@ -1,21 +1,16 @@
 ---
 name: navi-core
 description: >
-  Core reference for Tenable navi CLI — covers installation (Python 3.12+ requirement,
-  Docker build from source), API key setup, database sync commands, version detection,
-  all navi.db table schemas, and key concepts like tagging timing and the 50K asset
-  scale fork. Use this skill for navi setup questions and as the entry point for
-  questions about core navi mechanics: "how do I install navi?", "how do I set up
-  navi?", "how do I update my database?", "what tables does navi have?", "what version
-  am I running?", "what does navi config do?". Also use when the user asks about
-  navi config commands, FedRAMP URL config, SLA setup, Docker setup, Python version,
-  thread count, SQL indexes, multi-workload pattern, API key permissions, or any
-  prerequisite step before running other navi commands. For fix-it workflows ("why
-  isn't navi working", "zero chunks", "db locked", "empty results", "missing
-  assets", "after upgrade") use navi-troubleshooting instead. Companion skills:
-  navi-mcp (MCP conventions), navi-troubleshooting (fix-it), navi-enrich (tagging),
-  navi-acr (ACR adjustment), navi-explore (querying), navi-action (automation),
-  navi-export (CSV exports), navi-scan (scan control), navi-was (WAS).
+  Core reference for Tenable navi CLI: installation (Python 3.12+, Docker build),
+  API key setup, database sync commands, version detection, all navi.db table schemas,
+  tagging timing, and the 50K asset scale fork. Use for navi setup and core mechanics:
+  "how do I install navi?", "set up navi", "update my database", "what tables does
+  navi have?", "what version am I running?". Also covers navi config commands, FedRAMP
+  URL config, SLA setup, Docker setup, thread count, SQL indexes, multi-workload pattern,
+  API key permissions, and prerequisite steps before other navi commands. For fix-it
+  workflows ("why isn't navi working", "zero chunks", "db locked", "empty results",
+  "missing assets", "after upgrade") use navi-troubleshooting instead. See the navi
+  router skill for the full skill index.
 ---
 
 # Navi Core — Setup, Config & Schema
