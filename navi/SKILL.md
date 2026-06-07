@@ -82,10 +82,15 @@ any row, jump to the referenced skill.
 | User says | Tool call / Path | Skill |
 |---|---|---|
 | "install navi" | CLI: `pip install navi-hostio` | navi-core |
-| "set up API keys" | CLI (out-of-band): `navi keys --a <> --s <>` | navi-core |
+| "set up API keys" | CLI (out-of-band): `navi config keys --a <> --s <>` | navi-core |
 | "what version am I running" | `navi_explore_info(subcommand="version")` | navi-core |
 | "update my database" (targeted) | `navi_config_update(kind="vulns")` etc. | navi-core |
 | "update my database" (foundational) | CLI: `navi config update full` | navi-core |
+| "build indexes / make navi faster" (8.5.31+) | CLI: `navi config optimize` | navi-core |
+| "populate EPSS data" | CLI: `navi config epss` | navi-core |
+| "set up SMTP for navi action mail" | CLI: `navi config smtp` | navi-action |
+| "set up SSH for navi action push" | CLI: `navi config ssh` | navi-action |
+| "create a scanner group" | CLI: `navi config scan` | navi-scan |
 
 ### Troubleshooting
 
@@ -94,7 +99,9 @@ any row, jump to the referenced skill.
 | "navi isn't working" / "error" / "it's broken" | navi-troubleshooting |
 | "zero chunks" | navi-troubleshooting |
 | "db locked" / "sqlite3.OperationalError" | navi-troubleshooting |
-| "tagging is slow" | navi-troubleshooting |
+| "tagging is slow" | navi-troubleshooting (start with `navi config optimize`) |
+| "tagging is still slow even after optimize" | navi-troubleshooting (purpose-built workload) |
+| "optimize errors with no such table" | navi-troubleshooting |
 | "empty results" / "no data returned" | navi-troubleshooting |
 | "missing assets" | navi-troubleshooting |
 | "after upgrade" / "schema mismatch" | navi-troubleshooting |
@@ -173,9 +180,9 @@ any row, jump to the referenced skill.
 |---|---|---|
 | "delete tag / user / scan / asset" | `navi_action_delete(kind=..., confirm=True)` | navi-action |
 | "rotate keys for user X" | `navi_action_rotate(username=..., confirm=True)` | navi-action |
-| "cancel running export" | `navi_action_cancel(kind=..., confirm=True)` | navi-action |
+| "cancel running export" | `navi_action_cancel(kind=..., uuid=..., confirm=True)` | navi-action |
 | "encrypt / decrypt file" | `navi_action_encrypt(file=...)` | navi-action |
-| "push a command to tagged hosts" | CLI: `navi action push --tag ... --command ...` | navi-action |
+| "push a command to tagged hosts" | CLI: loop the tag's IPs → `navi action push --target <IP> --command "..."` | navi-action |
 | "weekly operational hygiene" | The three-phase workflow | navi-action |
 
 ### Reporting & dashboards
@@ -253,7 +260,7 @@ current:
 
 - `navi_config_update(kind="route")`
 - `navi_config_update(kind="paths")`
-- `navi_config_update(kind="certificates")`
+- `navi_config(kind="certificates")`   *(cert table — NOT `config update certificates`)*
 
 Then the five dashboard exports:
 
@@ -336,17 +343,20 @@ after ACR/tagging writes. See navi-mcp's "Data freshness check" section.
 | `navi enrich attribute` | Cut from v1 surface |
 | `navi enrich migrate` | Cut from v1 surface |
 | `navi enrich tagrule` | Cut from v1 surface |
-| `navi keys` | API keys set out-of-band by the operator |
+| `navi config keys` | API keys set out-of-band by the operator |
 
-### CLI-only for now — may be exposed later
+### Now exposed (previously CLI-only)
+
+| Command | Exposed as |
+|---|---|
+| `navi explore api` | `navi_explore_api` — GET is free; POST/PUT are write-gated. Use it for raw endpoints, notably export-status polling: `navi_explore_api(url="/vulns/export/<UUID>/status")` |
+| `navi explore uuid` (simple lookup) | `navi_explore_data(subcommand="asset", asset=<IP_or_UUID>)` — returns the default single-asset detail |
+
+### Still CLI-only — may be exposed later
 
 | Command | Value |
 |---|---|
-| `navi explore uuid` | Single-asset detail lookup with per-plugin views |
-| `navi explore api` | Passthrough Tenable API GET/POST/PUT — API troubleshooting |
-
-Planned additions to the navi-mcp surface. Until then, covered as CLI
-commands in navi-explore.
+| `navi explore uuid` (rich views) | Per-plugin detail flags (`-patch`, `-tracert`, `-cves`, `-vulns`, `-compliance`, …) are not yet wrapped; run at the CLI when you need them |
 
 ---
 
@@ -366,6 +376,9 @@ there for detail.
 | ACR mod set/inc/dec semantics | navi-acr |
 | Cert plugin IDs (10863, 15901, 42981, 51192, 69511, 60108) | navi-core |
 | Multi-workload pattern (one navi.db per workload environment) | navi-core |
+| Index optimization (`navi config optimize`, 8.5.31+) | navi-core (recommend after first sync) + navi-troubleshooting (slow tagging) |
+| `update full` does NOT build indexes; targeted `update vulns` does | navi-core + navi-mcp |
+| Post-upgrade recovery (delete → re-keys → sync → optimize) | navi-core + navi-troubleshooting |
 | Troubleshooting (zero chunks, db locks, slow tagging, post-upgrade) | navi-troubleshooting |
 | Weekly operational hygiene (three-phase MCP + CLI workflow) | navi-action |
 

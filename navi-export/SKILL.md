@@ -9,7 +9,8 @@ description: >
   ACR and AES scores alongside asset data — essential for risk reporting by business
   segment. Trigger on: "export to CSV", "give me a spreadsheet", "download asset list",
   "export vulnerabilities", "give me a report", "export compliance", "export by tag",
-  "export users", "export agents", "export policies for migration".
+  "export users", "export agents", "export policies for migration", "export status",
+  "check on my export", "is my export finished".
 ---
 
 # Navi Export — CSV Export Reference
@@ -22,12 +23,13 @@ preview, not the full export** — Claude surfaces the file path to the user
 and prefers `navi_explore_query` against navi.db for further analysis.
 
 **Data freshness matters.** CSV exports are only as current as navi.db. For
-targeted refreshes between full syncs, use `navi_config_update(kind=...)`
-(vulns, assets, agents, compliance, certificates, route, paths, was). For
-foundational syncs and first-run setup, `navi config update full` is the
-CLI command you run at your terminal — it's intentionally not exposed as
-an MCP tool because first-run syncs can pull hundreds of GB and take hours.
-See navi-mcp for the full stance.
+targeted refreshes between full syncs, use `navi_config_update(kind=...)` —
+valid kinds are `assets`, `vulns`, `agents`, `compliance`, `route`, `paths`,
+`was`, `fixed`, `plugins`. (The certs table is *not* an update kind; populate it
+with `navi_config(kind="certificates")`.) For foundational syncs and first-run
+setup, `navi config update full` is the CLI command you run at your terminal —
+it's intentionally not exposed as an MCP tool because first-run syncs can pull
+hundreds of GB and take hours. See navi-mcp for the full stance.
 
 When running under navi-mcp, use tool-invocation form (shown first in each
 example below). The bash forms are standalone CLI equivalents for readers
@@ -280,6 +282,45 @@ to the CLI for mailing.
 
 Claude does not try to invoke `action mail` through any tool and does not
 batch the mail step silently into an automation sequence.
+
+---
+
+## In-flight export status
+
+`navi_export(...)` launches an export and blocks until it finishes. Large
+exports (vulns/assets) can exceed the ~4-minute call budget. Polling an export
+by UUID is useful when:
+
+- An export was launched outside this session (the Tenable UI, another tool, a
+  prior MCP call that hit the call budget and returned before finishing).
+- You want to confirm an export already completed before kicking off a duplicate.
+
+This is now **tool-driven** via the `navi_explore_api` passthrough (GET, no
+confirmation needed):
+
+```
+# Vulnerability exports
+navi_explore_api(url="/vulns/export/<EXPORT_UUID>/status")
+navi_explore_api(url="/vulns/export/<EXPORT_UUID>/chunk/<CHUNK_NUMBER>")
+
+# Asset exports — same shape, 'assets' instead of 'vulns'
+navi_explore_api(url="/assets/export/<EXPORT_UUID>/status")
+navi_explore_api(url="/assets/export/<EXPORT_UUID>/chunk/<CHUNK_NUMBER>")
+```
+
+CLI equivalent (fallback): `navi explore api '/vulns/export/<EXPORT_UUID>/status'`.
+
+**Typical flow**: poll `/status` until state is `FINISHED` (or `PROCESSING`
+with chunks already available), read `chunks_available` from the response, then
+fetch each chunk number in turn. States are `QUEUED`, `PROCESSING`, `FINISHED`,
+`CANCELLED`, `ERROR`. A 401 here means the same thing it means anywhere else in
+navi — keys are missing, wrong, or revoked; fix them in navi-mcp / Tenable
+before retrying. (To cancel an export still in flight, `navi_action_cancel`
+takes the export `uuid`.)
+
+For the surrounding workflow — what to do when an MCP export exceeds the call
+budget, and how to avoid the DB-lock chain that can follow — see
+navi-troubleshooting's "Long-running operations and MCP timeouts".
 
 ---
 

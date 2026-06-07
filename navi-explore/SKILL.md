@@ -69,7 +69,7 @@ All data for one asset — pass IP or UUID via the `asset` parameter.
 `navi_explore_data(subcommand="asset", asset="<IP_or_UUID>")`
 
 ```bash
-navi explore asset <IP_or_UUID>
+navi explore uuid <IP_or_UUID>
 ```
 
 All output for one plugin across all assets.
@@ -77,7 +77,7 @@ All output for one plugin across all assets.
 `navi_explore_data(subcommand="plugin", plugin_id=<PLUGIN_ID>)`
 
 ```bash
-navi explore plugin <PLUGIN_ID>
+navi explore data plugin <PLUGIN_ID>
 ```
 
 Inspect a table's schema. Prefer the `navi://schema/{table}` resource when
@@ -90,31 +90,31 @@ subcommand works too.
 navi explore data db-info --table <table>
 ```
 
-### CLI-only helpers — coming to MCP
+### Per-asset deep-dive and API passthrough
 
-Two `navi explore` commands are not yet exposed as MCP tools but are planned:
-
-- **`navi explore uuid <IP_or_UUID>`** — single-asset detail lookup with
-  flags for specific plugin output (patch info, processes, connections,
-  services, software, exploits, etc.). Highly valuable for deep-diving a
-  single host. Until `navi_explore_uuid` ships, use
-  `navi_explore_data(subcommand="asset", asset="<target>")` for the basic
-  case, or drop to the CLI for flag-driven views:
+- **Single-asset detail** — the basic lookup is the `asset` subcommand above
+  (`navi_explore_data(subcommand="asset", asset="<target>")`, which runs
+  `navi explore uuid` under the hood). The **flag-driven views** — specific
+  informational plugin output (software, patches, processes, connections,
+  services, exploits) — aren't exposed as tool parameters, so drop to the CLI:
   ```bash
   navi explore uuid 192.168.1.50 -software
   navi explore uuid 192.168.1.50 -patches
-  navi explore uuid 192.168.1.50 --plugin 19506
+  navi explore uuid 192.168.1.50 --plugin 19506   # scan info / duration
   ```
-- **`navi explore api <URL>`** — passthrough GET/POST/PUT against the
-  Tenable API. Useful for troubleshooting API behavior directly. Until
-  `navi_explore_api` ships, drop to the CLI:
-  ```bash
-  navi explore api /scans
-  navi explore api /scans/123 -post --payload '{"name":"updated"}'
-  ```
+  These per-asset views are the workhorse for scan-duration diagnosis
+  (19506 scan info/duration, 45432 processor, 45433 memory — high software
+  counts via 20811/22869 correlate with long scans) and deep host inspection.
+  See navi-scan's evaluate workflow.
 
-Both tools are planned additions to the navi-mcp surface. When they ship,
-the CLI handoff becomes a tool call.
+- **API passthrough** — now a tool (was CLI-only): `navi_explore_api(url="<path>")`
+  for GET (no confirmation), `method="POST"|"PUT"` for mutations (write-gated).
+  Useful for endpoints navi doesn't wrap — e.g. polling an export:
+  ```
+  navi_explore_api(url="/scans")
+  navi_explore_api(url="/vulns/export/<EXPORT_UUID>/status")
+  ```
+  CLI equivalent: `navi explore api '/scans'`.
 
 ### Vulnerability search subcommands
 
@@ -123,7 +123,7 @@ Find all assets affected by a specific CVE.
 `navi_explore_data(subcommand="cve", cve="CVE-2021-44228")`
 
 ```bash
-navi explore data cve --cve CVE-2021-44228
+navi explore data cve CVE-2021-44228
 ```
 
 Find all assets with exploitable vulnerabilities.
@@ -139,7 +139,7 @@ Find assets where the plugin NAME contains text.
 `navi_explore_data(subcommand="name", name="Apache")`
 
 ```bash
-navi explore data name --name "Apache"
+navi explore data name "Apache"
 ```
 
 Find assets where the plugin OUTPUT contains text.
@@ -147,7 +147,7 @@ Find assets where the plugin OUTPUT contains text.
 `navi_explore_data(subcommand="output", output="Log4j")`
 
 ```bash
-navi explore data output --output "Log4j"
+navi explore data output "Log4j"
 ```
 
 Find by cross-reference type — CISA KEV, IAVA, Bugtraq, OSVDB, MSFT, MSKB, CVE.
@@ -156,8 +156,8 @@ Find by cross-reference type — CISA KEV, IAVA, Bugtraq, OSVDB, MSFT, MSKB, CVE
 `navi_explore_data(subcommand="xrefs", xref_type="iava", xref_id="2024-0001")`
 
 ```bash
-navi explore data xrefs --type "CISA"
-navi explore data xrefs --type "iava" --id "2024-0001"
+navi explore data xrefs CISA
+navi explore data xrefs iava --xid "2024-0001"
 ```
 
 Find assets with a vulnerability on a specific port.
@@ -165,7 +165,7 @@ Find assets with a vulnerability on a specific port.
 `navi_explore_data(subcommand="port", port=3389)`
 
 ```bash
-navi explore data port --port 3389
+navi explore data port 3389
 ```
 
 ### Asset/service discovery subcommands
@@ -203,7 +203,7 @@ instead — both are useful.
 `navi_explore_data(subcommand="scantime", minutes=30)`
 
 ```bash
-navi explore data scantime --minutes 30
+navi explore data scantime 30
 ```
 
 ### Software & compliance subcommands
@@ -275,66 +275,11 @@ Before composing a query, check the relevant table's schema via
 `navi://schema/{table}` rather than guessing column names or running
 `SELECT * FROM {table} LIMIT 1`.
 
-### Useful query patterns
-
-```sql
--- Top exploitable assets
-SELECT asset_ip, plugin_name FROM vulns
-WHERE state='active'
-ORDER BY severity DESC LIMIT 20;
-
--- Assets with criticals, sorted
-SELECT asset_ip, count(*) AS crits FROM vulns
-WHERE severity='critical'
-GROUP BY asset_ip ORDER BY crits DESC;
-
--- Certs expiring soonest
-SELECT common_name, not_valid_after FROM certs
-ORDER BY not_valid_after LIMIT 20;
-
--- DISTINCT vuln paths — true remediator workload
-SELECT DISTINCT path, asset_uuid FROM vuln_paths
-WHERE path LIKE '%jenkins%';
-
--- Workload reduction: raw vs distinct
-SELECT count(*) AS raw FROM vuln_paths;
-SELECT count(DISTINCT path) AS distinct_locations FROM vuln_paths;
-
--- Software inventory ranked by asset count
-SELECT software_string, count(*) AS assets FROM software
-GROUP BY software_string ORDER BY assets DESC LIMIT 20;
-
--- EPSS — prioritize by exploit probability, not just severity
--- (requires epss table — downloaded separately from the EPSS CSV)
-SELECT e.epss_value, v.asset_ip, v.plugin_name, v.severity
-FROM vulns v
-INNER JOIN epss e ON v.cves LIKE '%' || e.cve || '%'
-WHERE e.epss_value > 0.5
-ORDER BY e.epss_value DESC LIMIT 20;
-
--- Highest EPSS score per asset
-SELECT v.asset_ip, MAX(e.epss_value) AS highest_epss
-FROM vulns v JOIN epss e ON v.cves LIKE '%' || e.cve || '%'
-GROUP BY v.asset_ip ORDER BY highest_epss DESC LIMIT 10;
-
--- Fixed vulns — verify remediation was confirmed
-SELECT asset_ip, plugin_name, severity, last_found FROM fixed
-ORDER BY last_found DESC LIMIT 20;
-
--- Remediation velocity per asset
-SELECT asset_ip, count(*) AS fixed_count FROM fixed
-GROUP BY asset_ip ORDER BY fixed_count DESC;
-
--- Plugin lookup — what does this plugin do, what CVEs, what xrefs
-SELECT plugin_id, plugin_name, severity, cves FROM plugins
-WHERE plugin_id='10863';
-
--- All plugins with CISA xrefs (what xrefs="CISA" uses under the hood)
-SELECT plugin_id, plugin_name FROM plugins
-WHERE xrefs LIKE '%CISA%' LIMIT 20;
-```
-
-For schema references and table-by-table populate commands, see navi-core.
+**Query cookbook** — a set of ready-to-adapt SQL recipes (top exploitable
+assets, criticals by host, certs expiring, DISTINCT vuln-path workload, software
+inventory + package search, EPSS prioritization, fixed-vuln verification,
+plugin lookup, and "where am I using `<tech>`" by `plugin_family`) lives in
+**`references/query-patterns.md`** (`navi://skill/explore/query-patterns`).
 
 ---
 
@@ -362,8 +307,10 @@ Claude narrates the effect in prose before running any non-SELECT statement:
 Full write-gate ceremony — prose + confirmation + `NAVI_MCP_ALLOW_WRITES=1`
 — still applies to the tools that change Tenable platform state:
 `navi_enrich_tag`, `navi_enrich_acr`, `navi_enrich_add`, `navi_scan`
-(create/start/stop), `navi_was` (scan/start/upload), `navi_action_delete`,
-`navi_action_rotate`, `navi_action_cancel`, `navi_config(kind="url")`.
+(create/start/stop/pause/resume), `navi_was` (scan/start/upload),
+`navi_action_delete`, `navi_action_rotate`, `navi_action_cancel` (needs the
+export `uuid`), `navi_config(kind="url")`, and `navi_explore_api` with
+`method="POST"|"PUT"`.
 
 ---
 

@@ -15,7 +15,8 @@ description: >
 
 Two surfaces for working with Tenable scans:
 
-- **`navi_scan(subcommand=..., ...)`** — create, start, stop, evaluate.
+- **`navi_scan(subcommand=..., ...)`** — write: create, start, stop, pause,
+  resume; read: evaluate, status, details, history, hosts, latest.
   Control and diagnostics.
 - **`navi_explore_info(subcommand=...)`** — list scans, scanners, policies,
   credentials, currently-running scans. Always current, live from the
@@ -30,7 +31,8 @@ write-gate convention — `create`, `start`, and `stop` are write-gated.
 
 ## Recurring scans — use the Tenable UI
 
-`navi_scan` covers one-off scan control (create, start, stop, evaluate).
+`navi_scan` covers scan control (create, start, stop, pause, resume) and
+read views (status, details, history, hosts, latest, evaluate).
 **Recurring scan schedules should be set up in the Tenable UI**, not
 through navi. The UI has a purpose-built scheduler with the right
 guardrails for recurring operations.
@@ -81,7 +83,7 @@ operation and confirm before invoking.
 **Required:** `targets` (comma-separated IPs, hostnames, CIDR ranges, or
 a mix).
 
-**Optional but usually needed:**
+**Optional:**
 
 - `scanner_id` — which Tenable scanner will run it (get from
   `navi_explore_info(subcommand="scanners")`)
@@ -91,26 +93,29 @@ a mix).
   (get from `navi_explore_info(subcommand="credentials")`)
 - `plugin` — restrict the scan to a single plugin ID (useful for
   verification scans after remediation)
-- `name` — custom scan name
+
+`navi scan create` has **no name option** — don't pass one; Tenable names the
+scan automatically. (The CLI also has `-discovery` and `--custom <template>`
+flags that the tool doesn't expose — for those, set `policy_id`, or run the
+create at the CLI.)
 
 ### Examples
 
-**Basic discovery scan against a subnet:**
+**Basic scan against a subnet:**
 
-`navi_scan(subcommand="create", targets="192.168.10.0/24", name="Subnet-10-discovery", confirm=True)`
+`navi_scan(subcommand="create", targets="192.168.10.0/24", confirm=True)`
 
 ```bash
-navi scan create 192.168.10.0/24 --name "Subnet-10-discovery"
+navi scan create 192.168.10.0/24
 ```
 
 **Credentialed scan with a specific policy and scanner:**
 
-`navi_scan(subcommand="create", targets="10.0.5.12,10.0.5.13,10.0.5.14", scanner_id="<SCANNER_ID>", policy_id="<POLICY_ID>", credential_uuid="<CRED_UUID>", name="DB tier patch verification", confirm=True)`
+`navi_scan(subcommand="create", targets="10.0.5.12,10.0.5.13,10.0.5.14", scanner_id="<SCANNER_ID>", policy_id="<POLICY_ID>", credential_uuid="<CRED_UUID>", confirm=True)`
 
 ```bash
 navi scan create 10.0.5.12,10.0.5.13,10.0.5.14 \
-  --scanner <SCANNER_ID> --policy <POLICY_ID> --cred <CRED_UUID> \
-  --name "DB tier patch verification"
+  --scanner <SCANNER_ID> --policy <POLICY_ID> --cred <CRED_UUID>
 ```
 
 **Single-plugin verification scan:**
@@ -118,10 +123,10 @@ navi scan create 10.0.5.12,10.0.5.13,10.0.5.14 \
 Useful after remediation — scan just the specific plugin you're trying to
 clear rather than running a full scan.
 
-`navi_scan(subcommand="create", targets="<TARGETS>", plugin=10863, name="Cert expiry verification", confirm=True)`
+`navi_scan(subcommand="create", targets="<TARGETS>", plugin=10863, confirm=True)`
 
 ```bash
-navi scan create <TARGETS> --plugin 10863 --name "Cert expiry verification"
+navi scan create <TARGETS> --plugin 10863
 ```
 
 **Trigger phrases:** "create a scan for X", "build a scan against X",
@@ -166,16 +171,66 @@ kill it", "abort scan X"
 
 ---
 
+## `navi_scan(subcommand="pause"|"resume", ...)` — pause / resume a scan
+
+Pause a running scan and resume it later, by ID. Both write-gated.
+
+`navi_scan(subcommand="pause", scan_id="<SCAN_ID>", confirm=True)`
+`navi_scan(subcommand="resume", scan_id="<SCAN_ID>", confirm=True)`
+
+```bash
+navi scan pause <SCAN_ID>
+navi scan resume <SCAN_ID>
+```
+
+**Trigger phrases:** "pause scan X", "resume scan X", "hold the scan",
+"continue the paused scan"
+
+---
+
+## Scan read views — `status` / `details` / `history` / `hosts` / `latest`
+
+Read-only inspection of scans. No write gate, no confirmation. All except
+`latest` take a `scan_id`.
+
+| Subcommand | Returns | Call |
+|---|---|---|
+| `status` | Current run status for a scan | `navi_scan(subcommand="status", scan_id="<ID>")` |
+| `details` | Configuration detail for a scan | `navi_scan(subcommand="details", scan_id="<ID>")` |
+| `history` | Run history for a scan | `navi_scan(subcommand="history", scan_id="<ID>")` |
+| `hosts` | Hosts included in a scan | `navi_scan(subcommand="hosts", scan_id="<ID>")` |
+| `latest` | Latest scan results (no ID needed) | `navi_scan(subcommand="latest")` |
+
+CLI equivalents: `navi scan status <SCAN_ID>`, `navi scan latest`, etc.
+
+These complement `navi_explore_info(subcommand="scans"|"running")` (which list
+scans): reach for the read views when you have a specific scan ID and want its
+status, config, run history, or host list.
+
+---
+
 ## `navi_scan(subcommand="evaluate", ...)` — scanner performance analysis
 
 **Read-only.** No confirmation required. Reports scan-time averages across
 three views — by policy, by scanner, and by scan name — using plugin 19506
 data from the local navi.db.
 
-`navi_scan(subcommand="evaluate", scan_id="<SCAN_ID>")`
+Scope it four ways:
+
+- **No args** → `navi_scan(subcommand="evaluate")` — averages across all
+  scanners / schedules / policies (the 10,000-foot view; start here).
+- **One scan** → `navi_scan(subcommand="evaluate", scan_id="<SCAN_ID>")`.
+- **A specific run** → add `histid`:
+  `navi_scan(subcommand="evaluate", scan_id="<SCAN_ID>", histid="<HIST_ID>")`
+  (get history IDs from `navi_scan(subcommand="history", scan_id=...)`). This is
+  how you compare two runs to explain a duration delta.
+- **Entire history** → `navi_scan(subcommand="evaluate", scan_id="<SCAN_ID>", full=True)`.
 
 ```bash
+navi scan evaluate                                   # cross-dimension averages
 navi scan evaluate --scanid <SCAN_ID>
+navi scan evaluate --scanid <SCAN_ID> --histid <HIST_ID>
+navi scan evaluate --scanid <SCAN_ID> -full
 ```
 
 **Refresh navi.db before running.** Evaluate reads the local database, not
@@ -295,7 +350,7 @@ bottleneck on scan X"
 >
 > Tool call: `navi_scan(subcommand="create", targets="10.0.5.0/24",
 > scanner_id="<SCANNER>", policy_id="<POLICY>", credential_uuid="<CRED>",
-> name="DMZ-10-5 baseline", confirm=True)`
+> confirm=True)`
 >
 > Confirm to create.
 >
@@ -319,7 +374,7 @@ the verify step.
 >
 > Build the comma-separated target list from the results, then:
 >
-> `navi_scan(subcommand="create", targets="<IPs>", plugin=10863, name="OpenSSL verify", confirm=True)`
+> `navi_scan(subcommand="create", targets="<IPs>", plugin=10863, confirm=True)`
 >
 > **Step 2 (MCP) — start it.**
 >
@@ -380,6 +435,12 @@ the verify step.
 | "build a verification scan for plugin X" | `navi_scan(subcommand="create", targets=<targets>, plugin=<id>, confirm=True)` |
 | "start scan X" / "launch X" | `navi_scan(subcommand="start", scan_id="<id>", confirm=True)` |
 | "stop scan X" / "kill the scan" | `navi_scan(subcommand="stop", scan_id="<id>", confirm=True)` |
+| "pause scan X" / "resume scan X" | `navi_scan(subcommand="pause"|"resume", scan_id="<id>", confirm=True)` |
+| "what's the status of scan X" | `navi_scan(subcommand="status", scan_id="<id>")` |
+| "show scan X config / details" | `navi_scan(subcommand="details", scan_id="<id>")` |
+| "scan X run history" | `navi_scan(subcommand="history", scan_id="<id>")` |
+| "what hosts are in scan X" | `navi_scan(subcommand="hosts", scan_id="<id>")` |
+| "latest scan results" | `navi_scan(subcommand="latest")` |
 | "why is scan X slow" | `navi_scan(subcommand="evaluate", scan_id="<id>")` |
 | "evaluate scanner performance" | `navi_scan(subcommand="evaluate", scan_id="<id>")` |
 | "is my scanner load balanced" | `navi_scan(subcommand="evaluate", scan_id="<id>")` |

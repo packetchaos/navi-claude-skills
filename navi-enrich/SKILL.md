@@ -52,14 +52,16 @@ outside an MCP context.
   `navi_explore_query(sql="SELECT count(uuid) FROM assets;")`. Under 50K
   uses plugin regex; over 50K uses dedicated `certs`/`software` tables
   via `query=...`.
-- **Slow tagging?** Two fixes: add SQL indexes via `navi_explore_query`
-  with `confirm=True` (see navi-core Troubleshooting), or use a
-  purpose-built navi workload directory containing only relevant plugin
-  data.
+- **Slow tagging?** First try `navi config optimize` at the CLI (navi
+  8.5.31+) — it builds curated indexes that fix most slowness in seconds.
+  If you're on older navi or need custom indexes, see navi-troubleshooting
+  for the manual SQL index fallback. For repeated workloads against a
+  specific subset, a purpose-built navi directory (see navi-core's
+  multi-workload pattern) is structurally faster.
 
 ---
 
-## `navi_enrich_tag` — complete option reference
+## `navi_enrich_tag` — selectors & use cases
 
 **Required args:** `category`, `value`, and `confirm=True` at call time.
 **Optional:** `description` for a human-readable tag description.
@@ -69,237 +71,55 @@ and `plugin_regexp` are modifiers that require `plugin`. `xid` requires
 `xrefs`. `histid` requires `scanid`. `require_both=True` requires both
 `parent_category` and `parent_value`.
 
-Every tag call is write-gated. The examples below show the tool form with
-`confirm=True`; in actual use, Claude narrates first and then asks for
-confirmation before invoking.
-
-### By vulnerability content
-
-Plugin fired:
-
-`navi_enrich_tag(category="Cat", value="Val", plugin=<ID>, confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --plugin <ID>
-```
-
-Plugin fired + text in output:
-
-`navi_enrich_tag(category="Cat", value="Val", plugin=<ID>, plugin_output="text", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --plugin <ID> --output "text"
-```
-
-Plugin fired + regex in output:
-
-`navi_enrich_tag(category="Cat", value="Val", plugin=<ID>, plugin_regexp="PATTERN", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --plugin <ID> -regexp "PATTERN"
-```
-
-Text in plugin name:
-
-`navi_enrich_tag(category="Cat", value="Val", plugin_name="Apache", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --name "Apache"
-```
-
-By CVE ID:
-
-`navi_enrich_tag(category="Cat", value="Val", cve="CVE-2021-44228", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --cve "CVE-2021-44228"
-```
-
-By CPE:
-
-`navi_enrich_tag(category="Cat", value="Val", cpe="cpe:/a:apache:http_server", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --cpe "cpe:/a:apache:http_server"
-```
-
-CISA Known Exploited Vulnerabilities (KEV):
-
-`navi_enrich_tag(category="CISA", value="KEV", xrefs="CISA", confirm=True)`
-
-```bash
-navi enrich tag --c "CISA" --v "KEV" --xrefs "CISA"
-```
-
-Cross-reference + specific ID:
-
-`navi_enrich_tag(category="Intel", value="IAVA", xrefs="IAVA", xid="2024-001", confirm=True)`
-
-```bash
-navi enrich tag --c "Intel" --v "IAVA" --xrefs "IAVA" --xid "2024-001"
-```
-
-Vuln on a specific port:
-
-`navi_enrich_tag(category="Cat", value="Val", port=3389, confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --port 3389
-```
-
-By route ID:
-
-`navi_enrich_tag(category="Route", value="Jenkins", route_id="<ID>", confirm=True)`
-
-```bash
-navi enrich tag --c "Route" --v "Jenkins" --route_id <ID>
-```
-
-### By asset identity
-
-CSV of IPs:
-
-`navi_enrich_tag(category="Cat", value="Val", file="assets.csv", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --file assets.csv
-```
-
-Specific asset UUID:
-
-`navi_enrich_tag(category="Cat", value="Val", manual="<UUID>", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --manual <UUID>
-```
-
-Agent group (requires `navi_config_update(kind="agents")`):
-
-`navi_enrich_tag(category="Cat", value="Val", group="Prod", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --group "Prod"
-```
-
-AD group CSV:
-
-`navi_enrich_tag(category="AD", value="Finance", byadgroup="ad.csv", confirm=True)`
-
-```bash
-navi enrich tag --c "AD" --v "Finance" --byadgroup ad.csv
-```
-
-Agents missing auth for N days:
-
-`navi_enrich_tag(category="Health", value="Missed 7d", missed=7, confirm=True)`
-
-```bash
-navi enrich tag --c "Health" --v "Missed 7d" --missed 7
-```
-
-> **Agent tagging prereq**: `group`, `missed`, `byadgroup` all require
-> agent data. Run `navi_config_update(kind="agents")` first — it is NOT
-> included in `navi config update full`. Zero results from `group` is
-> almost always a stale agents table.
-
-### By scan data
-
-All assets in a scan:
-
-`navi_enrich_tag(category="Cat", value="Val", scanid="<SCAN_ID>", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --scanid <SCAN_ID>
-```
-
-Specific scan history run:
-
-`navi_enrich_tag(category="Cat", value="Val", scanid="<ID>", histid="<HIST_ID>", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --scanid <ID> --histid <HIST_ID>
-```
-
-Assets with scan time > N minutes:
-
-`navi_enrich_tag(category="Health", value="Slow", scantime=30, confirm=True)`
-
-```bash
-navi enrich tag --c "Health" --v "Slow" --scantime 30
-```
-
-### By custom SQL query
-
-Any SQL that returns `asset_uuid` values. Most powerful option.
-
-`navi_enrich_tag(category="Cat", value="Val", query="SELECT asset_uuid FROM <table> WHERE ...;", confirm=True)`
-
-```bash
-navi enrich tag --c "Cat" --v "Val" --query "SELECT asset_uuid FROM <table> WHERE ...;"
-```
-
-Examples:
-
-`navi_enrich_tag(category="Route", value="Jenkins", query="SELECT DISTINCT asset_uuid FROM vuln_paths WHERE path LIKE '%jenkins%';", confirm=True)`
-
-`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Apr%2026%';", remove=True, confirm=True)`
-
-`navi_enrich_tag(category="WAS Risk", value="Critical", query="SELECT uuid FROM apps WHERE critical_count > 0;", remove=True, confirm=True)`
-
-### Tag-based derivation
-
-Derive from an existing tag — assets that already have `Environment:Production`
-become `Priority:High`:
-
-`navi_enrich_tag(category="Priority", value="High", by_tag="Environment:Production", confirm=True)`
-
-```bash
-navi enrich tag --c "Priority" --v "High" --by_tag "Environment:Production"
-```
-
-Match by tag value (fuzzy):
-
-`navi_enrich_tag(category="Tier", value="Prod-Like", by_val="Prod", confirm=True)`
-
-```bash
-navi enrich tag --c "Tier" --v "Prod-Like" --by_val "Prod"
-```
-
-Match by tag category:
-
-`navi_enrich_tag(category="Scope", value="Security", by_cat="CVE", confirm=True)`
-
-```bash
-navi enrich tag --c "Scope" --v "Security" --by_cat "CVE"
-```
-
-### Hierarchical tags
-
-Parent-child relationship. `parent_category`/`parent_value` specify the
-parent:
-
-`navi_enrich_tag(category="Country", value="US", parent_category="Region", parent_value="Americas", confirm=True)`
-
-```bash
-navi enrich tag --c "Country" --v "US" --cc "Region" --cv "Americas"
-```
-
-AND logic with `require_both=True`:
-
-`navi_enrich_tag(category="Child", value="Val", parent_category="Parent", parent_value="Val", require_both=True, confirm=True)`
-
-```bash
-navi enrich tag --c "Child" --v "Val" --cc "Parent" --cv "Val" -all
-```
-
-### Special modes
-
-- `tone=True` — create a TONE tag (Tenable One Exposure) instead of a TVM tag
-- `remove=True` — clear tag from all assets first, then re-apply (ephemeral
-  pattern — see below)
-- `description="text"` — add a description to the tag
-
----
+Every tag call is write-gated. Examples show the tool form with `confirm=True`;
+in actual use, Claude narrates first and then asks for confirmation before
+invoking.
+
+### Selector quick map
+
+One primary selector per call. Full per-selector examples (tool + CLI) are in
+**`references/selectors.md`** (`navi://skill/enrich/selectors`).
+
+| Selector | Tags assets by | Tool param |
+|---|---|---|
+| plugin (+ output / regexp) | a plugin firing, optionally matching output text | `plugin=`, `plugin_output=` |
+| `plugin_name` | text in the plugin NAME | `plugin_name=` |
+| `cve` / `cpe` | a CVE / CPE identifier | `cve=` / `cpe=` |
+| `xrefs` (+ `xid`) | a cross-reference type (e.g. CISA) | `xrefs=`, `xid=` |
+| `port` | a vuln on a given port | `port=` |
+| `route_id` | a route in `vuln_route` | `route_id=` |
+| `file` / `manual` | IPs in a CSV / explicit UUIDs | `file=` / `manual=` |
+| `group` / `byadgroup` | an agent group / AD groups in a CSV | `group=` / `byadgroup=` |
+| `missed` | agents that missed auth in N days | `missed=` |
+| `scanid` (+ `histid`) / `scantime` | a scan / assets scanning > N min | `scanid=` / `scantime=` |
+| `query` | a custom SELECT returning `asset_uuid` | `query=` |
+| `by_tag` / `by_cat` / `by_val` | derivation from existing tags | `by_tag=` etc. |
+| hierarchical | child→parent tag relationships | `parent_category=`, `parent_value=`, `require_both=` |
+| modes | ephemeral refresh / TONE tag | `remove=True` / `tone=True` |
+
+### Tagging use-case playbook
+
+Common real-world tagging goals → the selector to reach for:
+
+- **IoT / device fingerprinting** (correct assets Nessus mislabels as "Linux"):
+  SSL-cert appliances via `plugin=10863` + `plugin_output=`; local-network IoT
+  (e.g. Chromecast) via `plugin=66717`; MAC OUI via `plugin=35716`.
+- **Software inventory** ("where is `<package>`?"): `plugin_name=`, or `plugin=`
+  + `plugin_output=` against software plugins (20811 Win / 22869 Linux /
+  83991 Mac), or a `query=` on the `software` table. Classic case: find
+  tcpdump / wireshark.
+- **Plugin family** ("where am I using `<tech>`?", e.g. AI): `query=`
+  `"SELECT DISTINCT asset_uuid FROM vulns WHERE plugin_family='Artificial Intelligence';"`
+  — no native family selector, so use `query`.
+- **User access / offboarding** (which assets a local user can reach): `query=`
+  on the local-user enumeration plugins (95928 Linux / 71246 Windows), matching
+  the username in plugin output.
+- **CISA KEV** (actively-exploited): `xrefs="CISA"`, refreshed as an
+  **ephemeral** tag (`remove=True`) on each KEV release.
+- **Bulk by CVE from an external CSV** (e.g. MITRE ATT&CK→CVE): the `cve=`
+  selector in a download→parse→loop — worked example in
+  **`references/tag-by-cve-external-csv.md`** (`navi://skill/enrich/tag-by-cve-external-csv`).
+- **Slow-to-scan assets**: `scantime=<minutes>` (e.g. "Long Scan Times").
 
 ## The `remove=True` ephemeral tagging pattern
 
@@ -499,20 +319,22 @@ Single IP:
 navi enrich add --ip 192.168.1.100
 ```
 
-IP with hostname and FQDN:
+IP with optional identity fields — `hostname`, `fqdn`, `mac`, `netbios`
+(`mac` matters for OT/IoT, where MAC OUI is the reliable fingerprint):
 
-`navi_enrich_add(ip="192.168.1.100", hostname="web-prod-01", fqdn="web-prod-01.corp.com", confirm=True)`
+`navi_enrich_add(ip="192.168.1.100", hostname="web-prod-01", fqdn="web-prod-01.corp.com", mac="00:11:22:33:44:55", confirm=True)`
 
 ```bash
-navi enrich add --ip 192.168.1.100 --hostname "web-prod-01" --fqdn "web-prod-01.corp.com"
+navi enrich add --ip 192.168.1.100 --hostname "web-prod-01" --fqdn "web-prod-01.corp.com" --mac "00:11:22:33:44:55"
 ```
 
-CSV import:
+CSV import — the tool param is `list_csv`, but the CLI flag is **`--file`** (not
+`--list`). CSV column order is IP, MAC, FQDN, Hostname.
 
 `navi_enrich_add(list_csv="assets.csv", source="CMDB", confirm=True)`
 
 ```bash
-navi enrich add --list assets.csv --source "CMDB"
+navi enrich add --file assets.csv --source "CMDB"
 ```
 
 AWS inventory:
@@ -520,7 +342,7 @@ AWS inventory:
 `navi_enrich_add(list_csv="aws_inventory.csv", source="AWS", confirm=True)`
 
 ```bash
-navi enrich add --list aws_inventory.csv --source "AWS"
+navi enrich add --file aws_inventory.csv --source "AWS"
 ```
 
 Use for: CMDB imports, OT/IoT devices that can't be actively scanned,

@@ -58,20 +58,21 @@ platform-write tools:
 - `navi_enrich_acr` — adjusts asset criticality ratings
 - `navi_enrich_add` — adds assets to the platform
 - `navi_config(kind="url", ...)` — sets the FedRAMP/custom base URL
-- `navi_scan` — create, start, stop (evaluate is read-only and not gated)
-- `navi_was` — scan, start, upload (configs, scans listing, details, stats,
-  export are read-only and not gated)
+- `navi_explore_api(method="POST"|"PUT", ...)` — mutating API passthrough (GET is read, not gated)
+- `navi_scan` — create, start, stop, pause, resume (status/details/history/hosts/latest/evaluate are read-only, not gated)
+- `navi_was` — scan, start, upload (configs, scans, details, stats, export are read-only, not gated)
 - `navi_action_delete` — destructive; always write-gated
 - `navi_action_rotate` — rotates API keys
-- `navi_action_cancel` — cancels running exports
+- `navi_action_cancel` — cancels a running export (requires the export `uuid`)
 
-`navi_config(kind="software", ...)` is NOT write-gated — it parses plugin
-output into the local navi.db software table and doesn't change anything
-on the Tenable platform.
+`navi_config(kind="software", ...)` and `navi_config(kind="certificates", ...)`
+are NOT write-gated — they parse plugin output into local navi.db tables
+(software; certs via plugin 10863) and don't change anything on the Tenable
+platform.
 
-`navi_config(kind="sla", ...)` is NOT write-gated — it sets SLA thresholds
-but is interactive on the CLI. The tool completes without accepting stdin,
-so for initial setup, running at the terminal is more reliable. See navi-core.
+`navi_config(kind="sla", ...)` is NOT write-gated — it runs `config sla
+calculate` (computes SLA times locally). Setting/overwriting thresholds is
+`config sla reset`, which is interactive and stays on the CLI. See navi-core.
 
 `navi_action_encrypt` and `navi_action_decrypt` are NOT write-gated —
 they operate on local files only, no platform interaction.
@@ -139,7 +140,7 @@ Call them freely.
 
 ## API keys are set out-of-band
 
-Claude does NOT see or manage API keys. The `navi keys` command is not
+Claude does NOT see or manage API keys. The `navi config keys` command is not
 exposed as a tool — it is the operator's responsibility to set keys before
 navi-mcp is started.
 
@@ -163,19 +164,34 @@ itself.
 
 ## Resources
 
-The navi-mcp server exposes two read-only resources:
+The navi-mcp server exposes these read-only resources:
 
 - **`navi://schema/{table}`** — column definitions for any table in navi.db.
   Use this before writing a `navi_explore_query(sql=...)` when Claude is
-  unsure of column names. Preferred over guessing or over running
-  `SELECT * FROM {table} LIMIT 1`.
+  unsure of column names. Preferred over guessing or `SELECT * ... LIMIT 1`.
 
-- **`navi://workdir`** — the directory where navi.db lives, plus the current
-  write-gate status and the navi binary path. Useful when diagnosing
-  "why is the data stale" or "why did my write get rejected."
+- **`navi://workdir`** — where navi.db lives, the write-gate status, the navi
+  binary path, the MCP call budget, AND navi.db freshness (newest vuln
+  `last_found` / scan date). One read covers "where's my data," "why was my
+  write rejected," and the staleness check below.
 
-Resources are cheap — read them when they'd be helpful, no need to ask
-permission.
+- **`navi://skill/{name}`** — load a domain skill on demand (`name` ∈ router,
+  mcp, core, troubleshooting, enrich, acr, explore, export, scan, action, was).
+  The router is injected by the `navi_workflow` prompt; pull others when the
+  task matches their scope. If a skill has bundled references, they're listed
+  at the end of its output.
+
+- **`navi://skill/{name}/{ref}`** — load a skill's bundled reference file
+  (`ref` = filename without `.md`), e.g. `navi://skill/core/schema`. Skills use
+  progressive disclosure: `SKILL.md` is the lean index; deep material
+  (full schemas, exhaustive tables, long examples) lives in references loaded
+  only when needed.
+
+The server also exposes the **`navi_workflow` prompt** — in Claude Desktop it's
+the `/navi_workflow` slash command, which injects the router skill and frames
+the user's task.
+
+Resources are cheap — read them when they'd help, no need to ask permission.
 
 ### `navi_explore_query` supports both reads and writes
 
@@ -204,138 +220,34 @@ No separate write tool — the same `navi_explore_query` handles both. The
 
 ---
 
+
 ## Commands not exposed through navi-mcp
 
-The navi CLI has commands that are intentionally NOT wrapped as MCP tools.
-They fall into three categories, each with a different behavior from Claude.
+Some navi CLI commands are intentionally not wrapped as tools. Three categories:
 
-### Hazardous to automate — kept as CLI, recommended only when needed
+| Category | Commands | Claude's behavior |
+|---|---|---|
+| **Hazardous to automate** (CLI; recommend when needed) | `navi action push`, `navi action mail` | Explain as CLI steps inside a workflow; never invoke |
+| **Too heavy / foundational** (CLI; actively recommend) | `navi config update full`; one-time setup: `navi config optimize` / `epss` / `smtp` / `ssh` | Recommend at the right moment; run at the terminal |
+| **Out of scope** (don't teach) | `navi action deploy` / `automate` / `plan`, `navi enrich attribute` / `migrate` / `tagrule`, `navi config keys` | Acknowledge they exist; no runnable examples |
 
-These commands exist in navi, remain useful, but are deliberately kept out
-of the MCP tool surface so an LLM cannot drive them on the user's behalf.
-Claude explains them as CLI steps when a workflow naturally includes them.
-Claude does not try to invoke them through any tool.
+**Now exposed (previously CLI-only):** `navi explore api` → `navi_explore_api`
+(GET free, POST/PUT write-gated); `navi config certificates` →
+`navi_config(kind="certificates")`.
 
-- **`navi action push`** — remote command execution against Linux hosts.
-  Used in the Route → Tag → Push → Verify remediation cycle.
-- **`navi action mail`** — email reports and files. Used as a chained step
-  after exports or evaluations.
+**MCP → CLI handoff rule.** When a workflow crosses into a CLI-only command
+(`push` / `mail` / `update full`), Claude finishes the MCP portion, tells the
+user exactly what to run, and waits for confirmation that it completed before
+resuming on the MCP side. Claude never pretends to invoke a CLI-only command
+through a tool, and never continues silently past the CLI step.
 
-See navi-action for full CLI reference.
+**The ~4-minute call ceiling** on long targeted syncs
+(`navi_config_update(kind="vulns")` on a large tenant) is covered in **navi-core**
+— its canonical home — including the `days=N` and `--threads 1` CLI fallback.
 
-**Pattern for MCP → CLI handoff:**
-
-When the workflow crosses from MCP tools into a CLI-only command, Claude
-completes the MCP portion first, tells the user exactly what to run, and
-then resumes on the MCP side if there's a verification step afterward.
-
-**Worked example — Route → Tag → Push → Verify:**
-
-> Here's the full remediation cycle for Jenkins hosts. I'll drive the
-> tagging and verification through MCP tools; the push step is CLI-only,
-> so you'll run that part yourself.
->
-> **Step 1 (MCP) — build the route tag.** I'll query for every asset with a
-> vuln path containing "jenkins" and tag them with `Remediation:Jenkins-Q2`.
->
-> Tool call: `navi_enrich_tag(category="Remediation", value="Jenkins-Q2",
-> query="SELECT DISTINCT asset_uuid FROM vuln_paths WHERE path LIKE '%jenkins%';",
-> confirm=True)`
->
-> Confirm to apply.
->
-> *[...after user confirms and tool runs...]*
->
-> **Step 2 (CLI) — run the remediation.** `navi action push` is not an MCP
-> tool. Run this at your terminal:
->
-> ```bash
-> navi action push --tag "Remediation:Jenkins-Q2" \
->   --command "sudo apt-get upgrade jenkins -y"
-> ```
->
-> Wait for push to complete, then launch the verification scan. After that,
-> let me know and I'll kick off step 3 on the MCP side.
->
-> **Step 3 (MCP) — verify and clean up.** Once the remediation scan is done
-> and vulns are re-synced, I'll confirm the vulnerability is gone and
-> delete the temporary tag. Tell me when you're ready for that.
-
-The important pattern: Claude does NOT try to orchestrate the CLI step
-silently, does NOT pretend to invoke `action push` through an MCP tool,
-and does NOT continue past the CLI step without user confirmation that
-the CLI portion completed.
-
-### Too heavy for a tool call — kept as CLI, actively encouraged
-
-**`navi config update full`** is the foundational data sync that populates
-navi.db from the Tenable platform. Without it, navi.db is empty or stale
-and every read tool silently returns partial or useless results.
-
-It is NOT exposed as an MCP tool because:
-
-- First-run syncs on large tenants can pull hundreds of GB — 400GB+ is not
-  unusual.
-- Runtime is typically hours, sometimes longer.
-- An MCP tool call timing out, retrying, or being interrupted mid-sync
-  causes real damage to the local database.
-
-But unlike push and mail, Claude *actively recommends* this command. It is
-the single most important prerequisite for the entire navi-mcp toolchain.
-When navi.db is empty or stale, nothing else Claude does is reliable.
-
-**When Claude surfaces the `config update full` recommendation:**
-
-- **On apparent first-run** — if the data-freshness check (see next section)
-  shows navi.db is empty or has never been synced, Claude surfaces it before
-  attempting any data-dependent workflow.
-- **When stale-data symptoms appear** — queries returning unexpectedly small
-  counts, freshness check showing the newest `last_found` is weeks old, or
-  the user reports "missing assets" / "missing vulns."
-- **After ACR changes and tagging writes** — these operations only reach
-  Tenable's dashboards after a re-sync. Claude reminds the user once per
-  write sequence that a `navi config update full` (or a targeted
-  `navi_config_update`) at their terminal will reflect the change in the
-  platform. The 30-minute propagation window applies to the tag itself;
-  the re-sync is what pulls the updated state back into navi.db.
-
-**How Claude surfaces it:**
-
-> Before we go further: your navi.db was last synced 23 days ago
-> (newest vuln `last_found` is Mar 29). For reliable results on this
-> workflow, you'll want to refresh the local data. `navi config update full`
-> is the authoritative sync, but it's a CLI command — run it at your
-> terminal:
->
-> ```bash
-> navi config update full
-> ```
->
-> On a large tenant, this can take hours and pull hundreds of GB the first
-> time. It's kept out of the MCP tool surface for exactly that reason.
-> For a lighter targeted refresh (vulns only, assets only, etc.), I can
-> run `navi_config_update(kind="vulns")` directly — that finishes in
-> minutes and is fine as a tool call. Which would you like?
-
-Claude does NOT nag — the recommendation surfaces at the points above, not
-on every session or every message.
-
-### Out of scope for navi-mcp entirely
-
-These commands exist in navi but are not part of any navi-mcp workflow.
-Claude does not recommend them, compose around them, or teach them.
-
-- `navi action deploy` (all containers)
-- `navi action automate`
-- `navi action plan`
-- `navi enrich attribute`
-- `navi enrich migrate`
-- `navi enrich tagrule`
-
-If a user asks for any of these by name, Claude can acknowledge the command
-exists in navi and suggest the user consult the navi project directly —
-but does not produce runnable examples or work them into automation
-sequences.
+Full per-command rationale, the one-time-setup command details, and the worked
+Route → Tag → Push → Verify remediation example live in
+**`references/commands-not-exposed.md`** (`navi://skill/mcp/commands-not-exposed`).
 
 ---
 
@@ -359,6 +271,9 @@ confirmation needed (reads don't require confirm).
 navi_explore_query(sql="SELECT MAX(last_found) AS newest_vuln,
 MAX(last_licensed_scan_date) AS newest_scan FROM vulns;")
 ```
+
+(Or read **`navi://workdir`**, which now reports the same freshness figures —
+one resource read covers the check.)
 
 **Interpreting the result:**
 
@@ -417,16 +332,19 @@ When Claude is fulfilling a navi request under navi-mcp:
 
 ## Cross-references
 
-- **navi-core** — setup, schema, the 30-minute propagation rule,
-  50K-asset scale fork, multi-workload pattern
+- **navi-core** — setup, schema, the 30-minute propagation rule, 50K-asset
+  scale fork, multi-workload pattern, **and the ~4-min targeted-sync ceiling**
 - **navi-troubleshooting** — fix-it workflows for errors, empty results,
   slow tagging, post-upgrade recovery
 - **navi-enrich** — tagging, the `remove=True` ephemeral pattern, tag UUID
   preservation
 - **navi-acr** — Asset Criticality Rating adjustment, Change Reasons,
   mod set/inc/dec, suggested tier mapping
-- **navi-explore** — data and info subcommands, raw SQL patterns
+- **navi-explore** — data and info subcommands, the `explore_api` passthrough, raw SQL patterns
 - **navi-export** — CSV exports
-- **navi-scan** — scan creation, control, evaluate
+- **navi-scan** — scan creation, control, read views, evaluate
 - **navi-action** — delete, rotate, cancel, encrypt/decrypt; also push / mail (CLI-only)
 - **navi-was** — WAS configs, scans, findings, tagging
+
+**Bundled reference:** `references/commands-not-exposed.md` — full not-exposed
+rationale, one-time-setup commands, and the Route→Tag→Push→Verify worked example.

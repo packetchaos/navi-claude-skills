@@ -92,6 +92,10 @@ navi enrich acr --c <category> --v <value> --score <N> --mod set \
   -business   # or -compliance, -mitigation, -development
 ```
 
+The corrected navi-mcp server validates locally before calling: it rejects a
+`score` outside 1–10 and a call with no Change Reason flag, so those mistakes
+fail fast with a clear message instead of a Tenable round-trip.
+
 ---
 
 ## Prerequisite — assets must be tagged first
@@ -154,6 +158,10 @@ requirement.** Always pass at least one.
 - Monthly rebalancing as business priorities shift → `mod="set"`
 - "Bump these assets up while we investigate" → `mod="inc"` with `score=2`
   or so
+- Assets within one tag have inherently different criticality — e.g. a
+  database inside an application-stack tag where the front-end and ancillary
+  services are also tagged → `mod="inc"`/`"dec"` to nudge the standouts off the
+  tier baseline rather than re-tagging them separately
 - "OK, investigation is complete, return to baseline" → `mod="dec"` with
   the same `score` used for the earlier `inc`
 

@@ -66,7 +66,7 @@ status for each run. Use the returned `scan_id` in step 3.
 `navi_was(subcommand="scans", config_id="<config_id>")`
 
 ```bash
-navi was scans --config <config_id>
+navi was scans <config_id>
 ```
 
 **Step 3: show findings for a scan run** — shows each finding, severity,
@@ -75,7 +75,7 @@ OWASP category, solution. This is the list you hand to the dev team.
 `navi_was(subcommand="details", scan_id="<scan_id>")`
 
 ```bash
-navi was details --scan <scan_id>
+navi was details <scan_id>
 ```
 
 **Use this sequence whenever someone asks:** "show me WAS findings," "what
@@ -91,7 +91,7 @@ confirmation before launching. See navi-mcp for the convention.
 `navi_was(subcommand="scan", target="https://app.company.com", confirm=True)`
 
 ```bash
-navi was scan --target "https://app.company.com"
+navi was scan "https://app.company.com"
 ```
 
 Start a saved WAS config. **Write-gated.** Get `config_id` first via
@@ -100,7 +100,7 @@ Start a saved WAS config. **Write-gated.** Get `config_id` first via
 `navi_was(subcommand="start", config_id="<config_id>", confirm=True)`
 
 ```bash
-navi was start --config <config_id>
+navi was start <config_id>
 ```
 
 Statistics across all WAS scans (read-only).
@@ -124,7 +124,7 @@ Upload a completed scan file. **Write-gated.**
 `navi_was(subcommand="upload", file="<path/to/scan/file>", confirm=True)`
 
 ```bash
-navi was upload --file <path/to/scan/file>
+navi was upload <path/to/scan/file>
 ```
 
 ---

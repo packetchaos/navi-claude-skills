@@ -7,10 +7,11 @@ description: >
   "how do I install navi?", "set up navi", "update my database", "what tables does
   navi have?", "what version am I running?". Also covers navi config commands, FedRAMP
   URL config, SLA setup, Docker setup, thread count, SQL indexes, multi-workload pattern,
-  API key permissions, and prerequisite steps before other navi commands. For fix-it
-  workflows ("why isn't navi working", "zero chunks", "db locked", "empty results",
-  "missing assets", "after upgrade") use navi-troubleshooting instead. See the navi
-  router skill for the full skill index.
+  API key permissions, and prerequisite steps before other navi commands. Also flags
+  when long-running syncs must run on the CLI to avoid the MCP tool-call timeout.
+  For fix-it workflows ("why isn't navi working", "zero chunks", "db locked", "empty
+  results", "missing assets", "after upgrade", "tool call timed out") use
+  navi-troubleshooting instead. See the navi router skill for the full skill index.
 ---
 
 # Navi Core — Setup, Config & Schema
@@ -35,8 +36,8 @@ This skill has two setup paths. Read whichever matches your situation:
 - **Running under navi-mcp** → jump to "Setup under navi-mcp" below. Keys and
   installation are handled by your operator; your job is the initial data sync
   and knowing when to re-sync.
-- **Installing navi standalone** → read "Standalone installation" for the full
-  install-from-zero walkthrough.
+- **Installing navi standalone** → see **`references/installation.md`**
+  (`navi://skill/core/installation`) for the full install-from-zero walkthrough.
 
 ---
 
@@ -67,9 +68,41 @@ tool-call lifecycle. Run it at your terminal:
 navi config update full
 ```
 
+Scope a full sync to a single tag with `--c`/`--v` (handy for a per-tag /
+per-business-unit navi instance): `navi config update full --c "<category>" --v "<value>"`.
+
 After the initial sync completes, you can use `navi_config_update(kind=...)`
 for targeted incremental refreshes — those finish in minutes and are fine
 as tool calls. See "Targeted database sync (MCP-exposed)" below.
+
+#### Recommended: run `navi config optimize` after the first sync
+
+In navi 8.5.31+, run `navi config optimize` once after the first
+`navi config update full` completes:
+
+```bash
+navi config optimize
+```
+
+This builds a curated set of indexes against the `vulns` table and makes
+tagging, querying, and exporting noticeably faster — often the difference
+between a tag operation taking hours vs. seconds.
+
+`navi config update full` does NOT build these indexes itself, so without
+optimize you'll see slow performance until you run it. Note that targeted
+`navi_config_update(kind="vulns")` calls through MCP DO build indexes
+automatically — so users running incremental refreshes through the tool
+get this for free, but users who only ever do `update full` need to run
+optimize separately.
+
+Optimize takes seconds against a populated database. If you run it
+against an empty navi.db (no syncs have happened yet) it will print
+"no such table: main.vulns" errors per index — that's benign, just
+re-run after a sync. See navi-troubleshooting for the specific error.
+
+Indexes survive `navi_config_update(kind=...)` calls. They do NOT
+survive deleting navi.db. After any post-upgrade recovery (delete +
+re-keys + re-sync), re-run optimize.
 
 ### 3. After upgrading navi, you need to recover navi.db
 
@@ -92,8 +125,16 @@ the MCP server can do all of it:
    navi config update full
    ```
 
-4. **Back to Claude:** once navi.db exists again and is populated, resume
-   your MCP workflows.
+4. **You (at the CLI, navi 8.5.31+):** rebuild indexes — `navi config update full`
+   does not create them, and they were dropped when navi.db was deleted.
+   Without this step, tagging and queries will be much slower than they
+   were before the upgrade.
+   ```bash
+   navi config optimize
+   ```
+
+5. **Back to Claude:** once navi.db exists again, is populated, and is
+   indexed, resume your MCP workflows.
 
 Store API keys securely outside of navi.db (password manager, environment
 variables) so the out-of-band step in (2) is quick after an upgrade.
@@ -102,116 +143,16 @@ variables) so the out-of-band step in (2) is quick after an upgrade.
 
 ## Standalone installation
 
-**This section is for operators installing navi directly, not for end-users
-running under navi-mcp.** Under navi-mcp, these steps have already been
-done for you.
+Installing navi directly — Python 3.12+, Docker build, API key entry,
+key-permission scoping, version detection, and standalone post-upgrade
+recovery — is operator-only and already done for you under navi-mcp. Full
+walkthrough lives in **`references/installation.md`** (via the resource:
+`navi://skill/core/installation`).
 
-### Python requirement
-
-Navi requires **Python 3.12 or higher**. This is the most common first-run blocker.
-
-```bash
-# Check Python version first
-python3 --version
-
-# If below 3.12, install via pyenv (recommended — avoids system Python conflicts)
-curl https://pyenv.run | bash
-pyenv install 3.12
-pyenv global 3.12
-
-# Or via Homebrew on macOS
-brew install python@3.12
-echo 'export PATH="/usr/local/opt/python@3.12/bin:$PATH"' >> ~/.zshrc
-
-# Or via apt on Ubuntu/Debian
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update && sudo apt install python3.12 python3.12-pip
-
-# Then install navi
-pip3 install navi-hostio
-```
-
-### Docker — build from source (recommended over the published image)
-
-The published Docker image on Docker Hub is outdated. Build from the latest
-GitHub source instead:
-
-```bash
-# Clone the latest navi source
-git clone https://github.com/packetchaos/navi.git
-cd navi
-
-# Build a fresh image from the current Dockerfile
-docker build -t navi:latest .
-
-# Run navi in a container — mount a local directory to persist navi.db
-docker run -it \
-  -v $(pwd)/navi-data:/home/navi \
-  navi:latest \
-  navi keys --a <ACCESS_KEY> --s <SECRET_KEY>
-```
-
-Mounting a local volume (`-v`) is critical — otherwise the navi.db is lost
-when the container stops.
-
-### API keys — set these BEFORE running any other command
-
-**The most common mistake**: running `navi config update full` or any other
-command before setting API keys. Navi will appear to run but return no data.
-
-```bash
-navi keys --a <ACCESS_KEY> --s <SECRET_KEY>
-```
-
-API keys must be set first. Every other command depends on them.
-
-### API key permissions matter
-
-Navi can only see what your API key can see. If the API key is scoped to a
-subset of assets (e.g. a specific network or business unit), `navi config
-update full` will only download data for those assets. This is intentional
-and useful for scoped workloads — but it is also the cause of "why am I
-missing assets?" questions.
-
-**"Zero chunks" error on update commands** = the API key has no permission
-to the data being requested. Check:
-
-- Does the key have access to the assets/vulnerabilities you expect?
-- Is the key scoped to ALL assets, or a subset?
-- If you need full environment coverage, the key must have permissions on
-  ALL assets.
-
-### Check version after install
-
-```bash
-navi explore info version
-```
-
-Under navi-mcp, the same check is available as
-`navi_explore_info(subcommand="version")`.
-
-- **8.2+**: use `navi enrich tag`, `navi explore data query`, `navi explore asset`
-- **Pre-8.2**: use `navi tag`, `navi find query`
-
-Default to 8.2+ syntax unless the user confirms an older version.
-
-### After upgrading navi to a new version (standalone)
-
-Navi version upgrades cause a database schema mismatch. When this happens:
-
-```bash
-# 1. Delete the old database
-rm navi.db
-
-# 2. Re-enter API keys (they are stored in navi.db)
-navi keys --a <ACCESS_KEY> --s <SECRET_KEY>
-
-# 3. Re-sync data
-navi config update full
-```
-
-This is expected behaviour — not a bug. For MCP users, see the three-step
-recovery under "Setup under navi-mcp" above.
+> Key-scope reminder (the one install fact that bites later): navi only sees
+> what the API key can see. A key scoped to a subset of assets silently
+> returns partial data — the usual cause of "missing assets" / "zero chunks."
+> See navi-troubleshooting for the diagnostic ladder.
 
 ---
 
@@ -221,23 +162,65 @@ Once navi.db exists and has had a `navi config update full` run at least
 once, targeted refreshes are exposed through MCP as `navi_config_update(kind=...)`.
 Each finishes in minutes rather than hours and is safe to call as a tool.
 
+> **⚠️ Long syncs must run on the CLI, not through MCP.** The "minutes
+> rather than hours" expectation above holds for most tenants — but on a
+> large tenant a `vulns` (or full-size `assets`) refresh can run for tens
+> of minutes to **hours**. MCP tool calls are synchronous and the client
+> enforces a hard tool-call timeout (currently around 4 minutes in Claude
+> Desktop) that **cannot be raised from Claude's side** — it's set by the
+> MCP host, not by navi or navi-mcp, and there is no tool parameter to
+> extend it. When a sync exceeds that window the tool call fails with a
+> timeout even though the export usually keeps running on the Tenable
+> side, leaving you with no progress visibility and the local subprocess
+> still holding navi.db open.
+>
+> **Rule of thumb:**
+> - **Through MCP** — incremental refreshes you're confident will finish
+>   in a few minutes (small/scoped tenants, short `days=N` lookback
+>   windows). `navi_config_update(kind="vulns", days=7)` for a weekly
+>   catch-up is the canonical example.
+> - **On the CLI** — any first-time pull, full-size refresh, or anything
+>   on a large tenant. Run it at a terminal where it can take as long as
+>   it needs, throttling threads if the disk is slow:
+>
+>     ```bash
+>     navi config update vulns --threads 1
+>     navi config update assets
+>     ```
+>
+> Narrowing the window with `days=N` is the one practical lever that
+> keeps a vulns refresh inside the MCP timeout. A full-history pull
+> should always be CLI. For recovery steps when a sync does time out
+> (including what to do about the stuck subprocess and the DB lock that
+> often follows), see navi-troubleshooting's "Long-running operations
+> and MCP timeouts". This is the same reasoning that keeps
+> `navi config update full` off the MCP surface entirely.
+
 `navi_config_update(kind="assets")` — assets only
 `navi_config_update(kind="vulns")` — vulns only
 `navi_config_update(kind="compliance")` — compliance checks (required before
 `navi_export(subcommand="compliance")`)
 `navi_config_update(kind="agents")` — agent data (required before agent-based
 tagging: `group`, `missed`, `byadgroup` selectors in navi-enrich)
-`navi_config_update(kind="certificates")` — SSL/TLS cert table (required for
-large-scale cert tagging — see Scale Fork below)
 `navi_config_update(kind="route")` — vuln_route table (technology-level routing)
 `navi_config_update(kind="paths")` — vuln_paths table (filesystem/URL paths
 per vuln)
 `navi_config_update(kind="was")` — WAS apps + findings tables
+`navi_config_update(kind="fixed")` — fixed-vuln table (required before
+`navi_export(subcommand="failures")` / SLA processing)
+`navi_config_update(kind="plugins", size=N)` — full Tenable plugin DB.
+**`size` (1000–10000) is REQUIRED for `kind="plugins"`** (it's the API page
+size). Can be large/slow on the first run — mind the call budget.
 
-**Lookback window:** `navi_config_update(kind="assets", days=N)` and
-`navi_config_update(kind="vulns", days=N)` accept a `days` parameter to
-change the lookback window. **`days` is ONLY valid for `kind="assets"` or
-`kind="vulns"`** — passing it with any other kind raises an error.
+> **Certificates are NOT a `config update` kind.** The SSL/TLS cert table is
+> populated by **`navi_config(kind="certificates")`** (CLI: `navi config
+> certificates`), which parses plugin 10863 into the `certs` table. There is no
+> `navi config update certificates`. See "Other configuration" below.
+
+**Lookback window:** `navi_config_update(kind=..., days=N)` accepts a `days`
+parameter to change the lookback window. **`days` is ONLY valid for
+`kind="assets"`, `kind="vulns"`, or `kind="fixed"`** — passing it with any
+other kind raises an error.
 
 **Standalone CLI equivalents:**
 
@@ -246,10 +229,12 @@ navi config update assets
 navi config update vulns
 navi config update compliance
 navi config update agents
-navi config update certificates
 navi config update route
 navi config update paths
 navi config update was
+navi config update fixed
+navi config update plugins --size 10000
+navi config certificates          # cert table — NOT `config update certificates`
 ```
 
 **Agents note:** `navi_config_update(kind="agents")` is NOT included in the
@@ -262,21 +247,26 @@ explicitly whenever agent data is needed.
 
 ### SLA thresholds
 
-Set custom SLA thresholds per severity. Required before
-`navi_export(subcommand="failures")` returns meaningful data.
+`navi config sla` is a **group**, not a single command — it has two subcommands:
+`calculate` (compute SLA times against your `fixed` data) and `reset`
+(set/overwrite SLA threshold values). A bare `navi config sla` does nothing.
 
-`navi_config(kind="sla")` — **not write-gated, no confirm required.**
+`navi_config(kind="sla")` runs **`config sla calculate`** — **not write-gated,
+no confirm required.** It computes SLA times, so populate the `fixed` table
+first with `navi_config_update(kind="fixed")`. Meaningful
+`navi_export(subcommand="failures")` output depends on this.
 
 ```bash
-navi config sla
+navi config sla calculate          # what the MCP tool runs
 ```
 
-Be aware that SLA setup is interactive on the CLI (it prompts for
-threshold values). When invoked through MCP, the tool receives no stdin,
-so the command will either use existing defaults or complete without
-accepting interactive input. For **initial** SLA configuration, running
-the command at the terminal is the more reliable path. For re-runs after
-defaults are already set, the MCP tool works fine.
+**Setting/overwriting the thresholds themselves** is `navi config sla reset`,
+which is **interactive** (it prompts for per-severity values). Run it at the
+terminal — the MCP tool does not drive it:
+
+```bash
+navi config sla reset
+```
 
 ### Software table build (not write-gated)
 
@@ -288,6 +278,23 @@ table. Local DB operation, doesn't touch the Tenable platform.
 ```bash
 navi config software
 ```
+
+### Certificate table build (not write-gated)
+
+Parses plugin 10863 (SSL Certificate Information) into the `certs` table. Local
+DB operation, doesn't touch the Tenable platform. Required before large-scale
+cert tagging (see Scale Fork below).
+
+`navi_config(kind="certificates")`
+
+```bash
+navi config certificates
+```
+
+This is the correct cert-table command. It is **not** `navi config update
+certificates` — that subcommand does not exist. (Plugin 10863 doubles as an
+IoT/appliance fingerprint — dumped certs identify devices — not just an
+expiry source; see navi-enrich's device-fingerprinting playbook.)
 
 ### FedRAMP / custom base URL (write-gated)
 
@@ -340,12 +347,12 @@ tagging operations significantly quicker when working on a specific subset.
 ```bash
 # Full environment database
 mkdir ~/navi-full && cd ~/navi-full
-navi keys --a <KEY> --s <KEY>
+navi config keys --a <KEY> --s <KEY>
 navi config update full          # everything — large, comprehensive
 
 # Purpose-built workload: only assets with a specific plugin
 mkdir ~/navi-jenkins && cd ~/navi-jenkins
-navi keys --a <KEY> --s <KEY>
+navi config keys --a <KEY> --s <KEY>
 navi config update vulns         # then filter to only pull plugin 12345
 # Results: smaller DB, faster tagging, faster queries
 ```
@@ -404,125 +411,18 @@ software tagging.
 
 ## Database Schema Reference
 
-Schemas are also accessible live via the `navi://schema/{table}` resource
-under navi-mcp — prefer that when composing a query and unsure of column
-names, rather than relying on this static reference going out of date.
+The full table-by-table schema for navi.db — every table, its columns, how it's
+populated, and how tables join — lives in **`references/schema.md`** (via the
+resource: `navi://skill/core/schema`). Load it when composing non-trivial
+queries. For a single table's columns, prefer the live `navi://schema/{table}`
+resource, which can't go stale.
 
-### Core tables — populated by `navi config update full`
-
-**vulns** — active vulnerability findings (split exports to save space)
-`navi_id (PK), asset_ip, asset_uuid, asset_hostname, plugin_id, plugin_name,
-output, severity, cves, port, protocol, plugin_family, scan_uuid, scan_completed,
-scan_started, schedule_id, first_found, last_found, state`
-Note: `cves` is a comma-separated string of CVE IDs — used to JOIN with `epss` table.
-
-**assets** — asset inventory (split exports to save space)
-`ip_address, hostname, fqdn, uuid (PK), operating_system, mac_address, agent_uuid,
-first_found, last_found, network, last_licensed_scan_date`
-
-**plugins** — plugin metadata (descriptions, solutions, CVE/xref mappings)
-`plugin_id (PK), plugin_name, plugin_family, description, solution, cves, xrefs,
-severity, risk_factor`
-This is separate from per-asset `vulns`. Use it to look up what a plugin does,
-what CVEs it maps to, and what cross-references (CISA, IAVA, BID) it contains.
-This is what enables `navi_explore_data(subcommand="cve")`,
-`navi_explore_data(subcommand="xrefs")`, and `tone=True` tagging.
-
-**fixed** — remediated vulnerabilities (from fixed vuln endpoint)
-`asset_uuid, asset_ip, plugin_id, plugin_name, severity, output, last_found, fixed_date`
-Tracks vulns that have transitioned to "fixed" state. Use to verify remediation
-is confirmed and to track closure rates over time.
-Populate: part of `navi_config_update(kind="vulns")`.
-
-**agents** — Nessus agent inventory (Agent API endpoint)
-`uuid (PK), name, ip_address, status, platform, version, group, last_connect,
-agent_uuid, linked_on`
-Populate: `navi_config_update(kind="agents")` — NOT included in the
-foundational `navi config update full`; must be run explicitly.
-
-**tags** — tag assignments
-`tag_id (PK), asset_uuid, asset_ip, tag_key, tag_uuid, tag_value, tag_added_date`
+Quick orientation: `vulns`/`assets`/`plugins`/`tags`/`fixed`/`agents` come from
+core syncs; `certs`/`software`/`compliance`/`epss`/`zipper` are targeted builds;
+`vuln_route`/`vuln_paths` are routing tables; `apps`/`findings` are WAS.
 
 ---
 
-### Enrichment tables — separate targeted updates
-
-**compliance** — compliance check results
-`asset_uuid, check_name, actual_value, expected_value, status, audit_file,
-plugin_id, first_seen, last_seen, solution`
-Populate: `navi_config_update(kind="compliance")`
-
-**software** — installed software inventory (from plugins 22869/20811/83991)
-`asset_uuid, software_string`
-Populate: `navi_config(kind="software")` | Requires credentialed scans
-
-**certs** — SSL/TLS certificate data (parsed from plugin 10863)
-`asset_uuid, common_name, issuer_name, not_valid_before, not_valid_after,
-algorithm, key_length, signature_algorithm, subject_name, serial_number,
-country, state_province, organization_unit, signature_length`
-Dates in OpenSSL format: `Sep 04 20:36:29 2024 GMT`
-Populate: `navi_config_update(kind="certificates")`
-
-**epss** — Exploit Prediction Scoring System scores per CVE (downloaded from EPSS CSV)
-`cve (PK), epss_value, percentile`
-Provides probability scores (0.0–1.0) for CVE exploitation likelihood.
-Use to prioritize remediation by actual exploit probability, not just CVSS severity.
-Populate: downloaded and parsed from EPSS CSV (separate process, not an MCP tool)
-
-**Key EPSS query** (join vulns to EPSS scores):
-```sql
-SELECT e.epss_value, v.asset_ip, v.plugin_name, v.severity
-FROM vulns v
-INNER JOIN epss e ON v.cves LIKE '%' || e.cve || '%'
-WHERE e.epss_value > 0.5
-ORDER BY e.epss_value DESC;
-```
-
-**zipper** — internal aggregation/join table that combines data from multiple sources
-Used internally by navi to assemble cross-source views. Not typically queried directly.
-
----
-
-### Routing tables — `navi_config_update(kind="route")` + `kind="paths"`
-
-**vuln_route** — technology-level vuln routing
-`route_id (PK), app_name, plugin_list, total_vulns, vuln_type (Application | Operating System)`
-Populate: `navi_config_update(kind="route")` | View: `navi_explore_data(subcommand="route")`
-
-**vuln_paths** — vulnerable filesystem/URL paths
-`path_id (PK), plugin_id, path, asset_uuid`
-Populate: `navi_config_update(kind="paths")` | View: `navi_explore_data(subcommand="paths")`
-
----
-
-### WAS tables — `navi_config_update(kind="was")`
-
-**apps** — WAS scan summaries (one row per completed WAS scan config)
-`name, uuid (PK), target, scan_completed_time, pages_audited, pages_crawled,
-requests_made, critical_count, high_count, medium_count, low_count,
-info_count, owasp, tech_list, config_id`
-
-**findings** — WAS finding details per scan (note: NOT "plugins" — "findings" is correct)
-`uuid (PK), config_id (FK→apps), plugin_id, plugin_name, severity, output,
-solution, scan_completed_time`
-
----
-
-### Planned / not yet implemented
-
-**mitre** — MITRE ATT&CK technique data (downloaded and parsed from MITRE CSV)
-Status: planned, not implemented. Will map plugin_ids to ATT&CK techniques.
-Currently MITRE cross-reference tagging relies on xref data in the `plugins`
-table.
-
-**cisa_kev** — CISA Known Exploited Vulnerabilities (downloaded and parsed)
-Status: planned, not implemented as a standalone table.
-Currently covered via `navi_enrich_tag(xrefs="CISA", ...)` which reads from `plugins.xrefs`.
-
-**ownership** — asset ownership assignments
-Status: potential/in development. Will link assets to owners/teams.
-
----
 
 ## DISTINCT — the workload reality check
 
@@ -546,14 +446,18 @@ reduction**. Always use DISTINCT when communicating workload to remediators.
 
 | Need | MCP tool call / CLI |
 |------|---------|
-| Set API keys | CLI only, out-of-band: `navi keys --a ... --s ...` |
+| Set API keys | CLI only, out-of-band: `navi config keys --a ... --s ...` |
 | Full foundational sync | CLI only: `navi config update full` |
 | Sync assets | `navi_config_update(kind="assets")` |
 | Sync vulns | `navi_config_update(kind="vulns")` |
 | Sync agents | `navi_config_update(kind="agents")` |
 | Build routing + paths tables | `navi_config_update(kind="route")` then `navi_config_update(kind="paths")` |
-| Build cert table | `navi_config_update(kind="certificates")` |
+| Build cert table | `navi_config(kind="certificates")` (CLI: `navi config certificates`) |
+| Build fixed table (SLA) | `navi_config_update(kind="fixed")` |
+| Build full plugin DB | `navi_config_update(kind="plugins", size=10000)` (size required) |
 | Build software table | `navi_config(kind="software")` |
+| Build EPSS table | CLI only: `navi config epss` (downloads EPSS CSV and populates the `epss` table) |
+| Build indexes for fast tagging/querying (8.5.31+) | CLI only: `navi config optimize` |
 | Check version | `navi_explore_info(subcommand="version")` |
 | Inspect table schema | `navi://schema/{table}` resource, or `navi_explore_data(subcommand="db_info", table=...)` |
 | Spot-check an asset | `navi_explore_data(subcommand="asset", asset=<IP_or_UUID>)` |
@@ -569,22 +473,23 @@ The most frequent issues and their fixes:
 
 | Symptom | Most likely cause | Fix |
 |---|---|---|
-| "Zero chunks" on update | API key permissions | Check key scope in Tenable |
+| "Zero chunks" on update | Empty window, broken scanners, or key scope | Wider window first (`--days 365`), then scanner health, then key scope. See navi-troubleshooting |
 | DB locked error | Slow disk | `--threads 1` on full sync |
 | DB locked + low RAM | Under 4GB RAM | `--threads 1` + close other apps |
 | Tagging very slow | Large DB, no index | SQL index or purpose-built workload |
 | No results from any command (MCP) | navi.db empty or keys out-of-band | Run `navi config update full` at CLI; verify with operator |
-| No results from any command (standalone) | Keys not set | `navi keys --a ... --s ...` |
+| No results from any command (standalone) | Keys not set | `navi config keys --a ... --s ...` |
 | DB errors after upgrade | Schema mismatch | `rm navi.db` + re-keys + `update full` |
 | Missing assets | Key scoped to subset | Check key permissions in Tenable One |
 | Agent tags return zero | Stale agents table | `navi_config_update(kind="agents")` |
+| `navi_config_update` times out after ~4 min | Sync longer than MCP client timeout (big tenant, usually vulns) | Run on CLI: `navi config update vulns --threads 1`; or shrink with `days=N` |
 
 For full context on each symptom — root cause, resolution steps, MCP vs.
 standalone variants — see **navi-troubleshooting**.
 
-**Preventive context that stays in this skill**: the "API key permissions
-matter" subsection under Standalone installation explains why scoped keys
-cause Zero Chunks later. The multi-workload pattern explains how
-purpose-built navi directories reduce tagging slowness structurally.
-Both are install-time concerns; navi-troubleshooting covers the reactive
-fixes.
+**Preventive context**: the key-scope reminder in "Standalone installation"
+above (and the full "API key permissions matter" detail in
+`references/installation.md`) explains why scoped keys cause Zero Chunks later.
+The multi-workload pattern explains how purpose-built navi directories reduce
+tagging slowness structurally. Both are install-time concerns;
+navi-troubleshooting covers the reactive fixes.
