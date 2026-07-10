@@ -256,13 +256,12 @@ ORDER BY a.name, f.severity;
 
 ---
 
-## Delivering a CSV to someone — `navi action mail`
+## Delivering a CSV to someone — `navi_action_mail`
 
-`navi action mail` is CLI-only — it is not exposed as an MCP tool (see
-navi-mcp's "Commands not exposed" section for the rationale). When a
-workflow ends with "send this to X," Claude completes the export through
-the MCP tool, reports the returned CSV path to the user, then hands off
-to the CLI for mailing.
+Email is now a tool (`navi_action_mail`), but double-gated: it needs
+`NAVI_MCP_ALLOW_WRITES=1` + `NAVI_EMAIL=1` on the server plus `confirm=True`.
+Export first, then mail the returned path. Full harness: **navi-mail**
+(`navi://skill/mail`).
 
 **Pattern:**
 
@@ -273,15 +272,12 @@ to the CLI for mailing.
 > *[tool returns: "Wrote bytag_export.csv — 1,247 rows. Columns: ip_address,
 > hostname, uuid, os, network, acr, aes, ..."]*
 >
-> CSV is at `bytag_export.csv`. To mail it to your CISO, run this at your
-> terminal:
+> CSV is at `bytag_export.csv`. I'll email it to your CISO — confirm and I'll
+> send:
 >
-> ```bash
-> navi action mail --to "ciso@company.com" --file "bytag_export.csv"
-> ```
+> `navi_action_mail(to="ciso@company.com", subject="Production ACR/AES export", file="bytag_export.csv", confirm=True)`
 
-Claude does not try to invoke `action mail` through any tool and does not
-batch the mail step silently into an automation sequence.
+For sensitive columns, encrypt first (`navi_action_encrypt`) and mail the `.enc`.
 
 ---
 

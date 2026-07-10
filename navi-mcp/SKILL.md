@@ -42,9 +42,9 @@ When an MCP tool exists for an operation, call it directly. Do NOT produce a
 The CLI equivalents in the domain skills are secondary reference material —
 useful for standalone readers, but not what Claude emits when tools are available.
 
-**One exception:** for the three commands not exposed through MCP
-(`navi action push`, `navi action mail`), always use the CLI form — there
-is no tool. See "Commands not exposed" below.
+`navi action push` and `navi action mail` are now exposed as
+`navi_action_push` / `navi_action_mail`, but each sits behind an extra
+capability gate on top of the write gate (see "Extra capability gates" below).
 
 ---
 
@@ -64,6 +64,26 @@ platform-write tools:
 - `navi_action_delete` — destructive; always write-gated
 - `navi_action_rotate` — rotates API keys
 - `navi_action_cancel` — cancels a running export (requires the export `uuid`)
+- `navi_action_mail` — sends email; **double-gated** (also needs `NAVI_EMAIL=1`)
+- `navi_action_push` — remote command execution; **double-gated** (also needs
+  `NAVI_REMOTE_CODE_EXECUTION=1`)
+
+### Extra capability gates (mail & push)
+
+Two tools require a second env gate ON TOP of `NAVI_MCP_ALLOW_WRITES=1` — the
+master write gate alone does not enable them:
+
+- `navi_action_mail` runs only when `NAVI_MCP_ALLOW_WRITES=1` **and**
+  `NAVI_EMAIL=1`.
+- `navi_action_push` runs only when `NAVI_MCP_ALLOW_WRITES=1` **and**
+  `NAVI_REMOTE_CODE_EXECUTION=1`.
+
+Both still require per-call `confirm=True` after Claude narrates intent. If the
+capability gate is closed, the tool returns a block message — report it and
+stop; the operator restarts the server with the env var set (config helper:
+`--allow-email` / `--allow-remote-code-execution`, both alongside
+`--allow-writes`). Full harnesses: `navi://skill/mail` and
+`navi://skill/remote-exec`.
 
 `navi_config(kind="software", ...)` and `navi_config(kind="certificates", ...)`
 are NOT write-gated — they parse plugin output into local navi.db tables
@@ -227,19 +247,22 @@ Some navi CLI commands are intentionally not wrapped as tools. Three categories:
 
 | Category | Commands | Claude's behavior |
 |---|---|---|
-| **Hazardous to automate** (CLI; recommend when needed) | `navi action push`, `navi action mail` | Explain as CLI steps inside a workflow; never invoke |
 | **Too heavy / foundational** (CLI; actively recommend) | `navi config update full`; one-time setup: `navi config optimize` / `epss` / `smtp` / `ssh` | Recommend at the right moment; run at the terminal |
 | **Out of scope** (don't teach) | `navi action deploy` / `automate` / `plan`, `navi enrich attribute` / `migrate` / `tagrule`, `navi config keys` | Acknowledge they exist; no runnable examples |
 
 **Now exposed (previously CLI-only):** `navi explore api` → `navi_explore_api`
 (GET free, POST/PUT write-gated); `navi config certificates` →
-`navi_config(kind="certificates")`.
+`navi_config(kind="certificates")`; `navi action mail` → `navi_action_mail`
+(double-gated, `NAVI_EMAIL`); `navi action push` → `navi_action_push`
+(double-gated, `NAVI_REMOTE_CODE_EXECUTION`). See `navi://skill/mail` and
+`navi://skill/remote-exec`.
 
 **MCP → CLI handoff rule.** When a workflow crosses into a CLI-only command
-(`push` / `mail` / `update full`), Claude finishes the MCP portion, tells the
-user exactly what to run, and waits for confirmation that it completed before
-resuming on the MCP side. Claude never pretends to invoke a CLI-only command
-through a tool, and never continues silently past the CLI step.
+(`update full`, `config smtp` / `config ssh` setup), Claude finishes the MCP
+portion, tells the user exactly what to run, and waits for confirmation that it
+completed before resuming on the MCP side. Claude never pretends to invoke a
+CLI-only command through a tool, and never continues silently past the CLI step.
+(`push` and `mail` are no longer part of this hand-off — they are tools now.)
 
 **The ~4-minute call ceiling** on long targeted syncs
 (`navi_config_update(kind="vulns")` on a large tenant) is covered in **navi-core**
@@ -343,7 +366,10 @@ When Claude is fulfilling a navi request under navi-mcp:
 - **navi-explore** — data and info subcommands, the `explore_api` passthrough, raw SQL patterns
 - **navi-export** — CSV exports
 - **navi-scan** — scan creation, control, read views, evaluate
-- **navi-action** — delete, rotate, cancel, encrypt/decrypt; also push / mail (CLI-only)
+- **navi-action** — delete, rotate, cancel, encrypt/decrypt (+ pointers to mail/push)
+- **navi-mail** — `navi_action_mail`; email harness, double gate (`NAVI_EMAIL`)
+- **navi-remote-exec** — `navi_action_push`; RCE harness, double gate
+  (`NAVI_REMOTE_CODE_EXECUTION`)
 - **navi-was** — WAS configs, scans, findings, tagging
 
 **Bundled reference:** `references/commands-not-exposed.md` — full not-exposed

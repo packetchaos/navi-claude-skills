@@ -43,7 +43,9 @@ exposed through MCP" list).
 | Querying navi.db, live Tenable API lookups, custom SQL | **navi-explore** |
 | CSV exports of any data | **navi-export** |
 | Creating, starting, stopping, evaluating scans | **navi-scan** |
-| Deleting objects, rotating keys, encrypting files, remote command execution (push), email delivery (mail) | **navi-action** |
+| Deleting objects, rotating keys, encrypting/decrypting files, cancelling exports | **navi-action** |
+| Emailing a report or file (`navi_action_mail`, double-gated) | **navi-mail** |
+| Running a command on / pushing a file to a remote Linux host (`navi_action_push`, double-gated) | **navi-remote-exec** |
 | Web Application Scanning (WAS / DAST), WAS findings, WAS tagging | **navi-was** |
 | Building the Executive Dashboard for leadership reporting | This skill — see below |
 | Translating a paraphrased question into the right command | This skill — see Natural Language Index below |
@@ -314,15 +316,15 @@ data workflow above.
 Consolidated reference. See navi-mcp for the full rationale on each
 category.
 
-### Hazardous to automate — kept as CLI, recommended when needed
+### Hazardous — exposed but double-gated
 
-| Command | Purpose | Skill |
-|---|---|---|
-| `navi action push` | Remote command execution against Linux hosts (remediation, inventory, config changes) | navi-action |
-| `navi action mail` | Email reports and files | navi-action / navi-export |
+| Command | Exposed as | Extra gate | Skill |
+|---|---|---|---|
+| `navi action push` | `navi_action_push` | `NAVI_REMOTE_CODE_EXECUTION=1` (+ writes + confirm) | navi-remote-exec |
+| `navi action mail` | `navi_action_mail` | `NAVI_EMAIL=1` (+ writes + confirm) | navi-mail |
 
-Claude explains these as CLI steps when a workflow naturally includes
-them. Never invoked through a tool.
+Each requires its own capability env var ON TOP of `NAVI_MCP_ALLOW_WRITES=1`,
+plus per-call `confirm=True`. Load the dedicated skill before driving either.
 
 ### Too heavy for a tool call — kept as CLI, actively recommended
 
@@ -351,6 +353,8 @@ after ACR/tagging writes. See navi-mcp's "Data freshness check" section.
 |---|---|
 | `navi explore api` | `navi_explore_api` — GET is free; POST/PUT are write-gated. Use it for raw endpoints, notably export-status polling: `navi_explore_api(url="/vulns/export/<UUID>/status")` |
 | `navi explore uuid` (simple lookup) | `navi_explore_data(subcommand="asset", asset=<IP_or_UUID>)` — returns the default single-asset detail |
+| `navi action mail` | `navi_action_mail` — double-gated (`NAVI_EMAIL=1` + writes + confirm). See navi-mail |
+| `navi action push` | `navi_action_push` — double-gated (`NAVI_REMOTE_CODE_EXECUTION=1` + writes + confirm). See navi-remote-exec |
 
 ### Still CLI-only — may be exposed later
 

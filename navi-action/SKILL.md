@@ -2,24 +2,24 @@
 name: navi-action
 description: >
   Automation and action skill for Tenable navi CLI. Covers navi action commands
-  available through navi-mcp: delete (remove tags/users/scans/assets/agents/exclusions),
-  rotate (API key rotation), cancel (stop exports), encrypt/decrypt (file security).
-  Also covers navi action push (remote command execution on Linux targets) and
-  navi action mail (email reports/files) — both CLI-only, not exposed as MCP tools.
-  Trigger on: "delete this tag", "remove stale tags", "rotate API keys", "offboard
-  user", "cancel export", "encrypt a file", "send report to", "push a command to
-  assets", "remediate tagged assets", "run a command across a tag group", "clean
-  up tags".
+  exposed through navi-mcp: delete (remove tags/users/scans/assets/tgroups/
+  usergroups/tone), rotate (API key rotation), cancel (stop exports),
+  encrypt/decrypt (file security). The two hazardous action commands — push
+  (remote command execution) and mail (email) — are now exposed as double-gated
+  tools; their detailed harnesses live in the navi-remote-exec and navi-mail
+  skills. Trigger on: "delete this tag", "remove stale tags", "rotate API keys",
+  "offboard user", "cancel export", "encrypt a file", "send report to", "push a
+  command to assets", "remediate tagged assets", "run a command across a tag
+  group", "clean up tags".
 ---
 
 # Navi Action — Operations & Remediation
 
-Five action commands are exposed through MCP as tools; two (`push` and `mail`)
-are kept CLI-only because they are hazardous to automate. See navi-mcp for
-the full stance on the kept-as-CLI convention and the MCP → CLI handoff
-pattern.
+Seven action commands are exposed through MCP as tools. Five general-purpose
+ones are documented here; the two hazardous ones (`push`, `mail`) are exposed
+but each sits behind its own capability gate and has a dedicated harness skill.
 
-**MCP-exposed tools:**
+**Documented here:**
 
 - `navi_action_delete` — write-gated, destructive
 - `navi_action_rotate` — write-gated
@@ -27,14 +27,17 @@ pattern.
 - `navi_action_encrypt` — not write-gated, local files only
 - `navi_action_decrypt` — not write-gated, local files only
 
-**CLI-only — you run at your terminal:**
+**Hazardous — double-gated, see the dedicated skill:**
 
-- `navi action push` — remote command execution against Linux hosts
-- `navi action mail` — email reports and files
+- `navi_action_push` — remote command execution on a Linux host. Requires
+  `NAVI_MCP_ALLOW_WRITES=1` + `NAVI_REMOTE_CODE_EXECUTION=1` + `confirm=True`.
+  Full harness: **navi-remote-exec** (`navi://skill/remote-exec`).
+- `navi_action_mail` — email a report/file. Requires `NAVI_MCP_ALLOW_WRITES=1` +
+  `NAVI_EMAIL=1` + `confirm=True`. Full harness: **navi-mail**
+  (`navi://skill/mail`).
 
 When running under navi-mcp, use tool-invocation form (shown first in each
-MCP example). Bash forms are standalone CLI equivalents. For push and mail,
-only CLI examples appear — there are no tool forms.
+MCP example). Bash forms are standalone CLI equivalents.
 
 ---
 
@@ -238,145 +241,35 @@ this CSV", "decrypt the .enc file", "unlock this report"
 
 ---
 
-## `navi action push` — remote command execution (CLI only)
+## `navi_action_push` — remote command execution (double-gated)
 
-**Not exposed through navi-mcp.** This command runs arbitrary shell commands on
-a **single Linux target IP** (`--target` is required). It is deliberately kept
-CLI-only — letting an LLM drive remote shell execution is a risk surface not
-worth opening, even with confirmation gates.
+Exposed as a tool, but the highest-risk one in navi: it runs shell commands on a
+**single Linux host** over SSH. Requires `NAVI_MCP_ALLOW_WRITES=1` +
+`NAVI_REMOTE_CODE_EXECUTION=1` on the server, plus `confirm=True` after you
+narrate the literal target and command.
 
-Claude explains this as a CLI step when a workflow naturally includes it
-(remediation, patching, inventory), and never tries to invoke it through a tool.
+`navi_action_push(target="10.0.5.12", command="sudo systemctl restart nginx", confirm=True)`
 
-**Flags:** `--target <IP>` (required), `--command "<cmd>"` (double-quoted),
-`--file <path>` (push a file instead of a command). **There is no `--tag`
-option** — push hits one IP. To run across a tagged group, enumerate the tag's
-asset IPs and loop push over each.
-
-### Common push patterns
-
-Update a package / restart a service on one host:
-
-```bash
-navi action push --target 10.0.5.12 \
-  --command "sudo apt-get update && sudo apt-get upgrade openssl -y"
-navi action push --target 10.0.5.12 --command "sudo systemctl restart nginx"
-```
-
-Across a tagged group — pull the IPs once, then loop:
-
-```bash
-for ip in $(navi explore data query \
-  "SELECT a.asset_ip FROM tags t JOIN assets a ON t.asset_uuid=a.uuid \
-   WHERE t.tag_key='Remediation' AND t.tag_value='OpenSSL-Q2';"); do
-  navi action push --target "$ip" \
-    --command "sudo apt-get update && sudo apt-get upgrade openssl -y"
-done
-```
-
-### The Route → Tag → Push → Verify cycle
-
-The canonical remediation pattern crosses between MCP tools and the CLI.
-Claude drives the tagging and verification; the user runs `push` at their
-terminal.
-
-**Worked example — OpenSSL upgrade across affected hosts:**
-
-> I'll walk through the full OpenSSL remediation cycle. Tagging and
-> verification happen through MCP tools; the push step is CLI-only, so
-> you'll run that at your terminal.
->
-> **Step 1 (MCP) — tag the affected hosts.** Find every asset with an
-> OpenSSL-related finding and tag them `Remediation:OpenSSL-Q2`.
->
-> Tool call: `navi_enrich_tag(category="Remediation", value="OpenSSL-Q2",
-> query="SELECT DISTINCT asset_uuid FROM vulns WHERE plugin_name LIKE '%OpenSSL%' AND state='active';",
-> confirm=True)`
->
-> Confirm to apply.
->
-> *[user confirms; tool runs; 30-min propagation window begins]*
->
-> **Step 2 (CLI) — push the upgrade.** `push` targets one IP, so pull the
-> tagged hosts' IPs and loop. Run this at your terminal:
->
-> ```bash
-> for ip in $(navi explore data query \
->   "SELECT a.asset_ip FROM tags t JOIN assets a ON t.asset_uuid=a.uuid \
->    WHERE t.tag_key='Remediation' AND t.tag_value='OpenSSL-Q2';"); do
->   navi action push --target "$ip" \
->     --command "sudo apt-get update && sudo apt-get upgrade openssl libssl3 -y"
-> done
-> ```
->
-> Wait for push to complete, then launch your verification scan. Let me
-> know when the scan is done and vulns have re-synced.
->
-> **Step 3 (MCP) — verify and clean up.** Once you've re-synced, I'll
-> check that the OpenSSL vulns are gone and retire the remediation tag.
-> Tool calls:
->
-> - `navi_explore_query(sql="SELECT count(*) FROM vulns WHERE plugin_name LIKE '%OpenSSL%' AND state='active';")`
-> - If zero: `navi_action_delete(kind="tag", category="Remediation", value="OpenSSL-Q2", confirm=True)`
->
-> (Deleting the campaign tag is appropriate here — it's truly retiring,
-> not rotating. See the delete section.)
-
-Claude does NOT try to orchestrate the CLI step silently, does NOT pretend
-to invoke `action push` through an MCP tool, and does NOT continue past
-the CLI step without user confirmation that the push completed.
+Key constraints: exactly one of `command`/`file`; **no `--tag`** — push hits one
+IP, so loop per-IP for a tagged group. The full harness — the Route→Tag→Push→
+Verify remediation cycle, per-IP looping, SSH prerequisite, and failure modes —
+lives in the **navi-remote-exec** skill (`navi://skill/remote-exec`). Load it
+before driving any remediation push.
 
 ---
 
-## `navi action mail` — email reports (CLI only)
+## `navi_action_mail` — email reports (double-gated)
 
-**Not exposed through navi-mcp.** Email delivery is deliberately kept CLI
-so that an LLM does not fire off email on a user's behalf. When a workflow
-ends in "send X to someone," Claude completes the MCP portion, surfaces
-the file path, and hands off to the CLI for mail.
+Exposed as a tool. Sends email via the out-of-band SMTP config. Requires
+`NAVI_MCP_ALLOW_WRITES=1` + `NAVI_EMAIL=1` on the server, plus `confirm=True`
+after you narrate the recipient, subject, and attachment.
 
-### Common mail patterns
+`navi_action_mail(to="ciso@company.com", subject="Production export", file="bytag_export.csv", confirm=True)`
 
-Mail a CSV to a single recipient:
-
-```bash
-navi action mail --to "ciso@company.com" --file "bytag_export.csv"
-```
-
-Mail with a custom subject:
-
-```bash
-navi action mail --to "security-team@company.com" \
-  --subject "Weekly SLA Breach Report" --file "failures_export.csv"
-```
-
-Mail an encrypted file (compose with `navi_action_encrypt`):
-
-Step 1 (MCP) — encrypt the file:
-`navi_action_encrypt(file="pii_export.csv")`
-
-Step 2 (CLI) — mail the encrypted version:
-```bash
-navi action mail --to "auditor@company.com" --file "pii_export.csv.enc"
-```
-
-### The export → mail handoff pattern
-
-> I'll export production assets with ACR and AES scores.
->
-> Tool call: `navi_export(subcommand="bytag", category="Environment", value="Production")`
->
-> *[tool returns: "Wrote bytag_export.csv — 1,247 rows"]*
->
-> CSV is at `bytag_export.csv`. To mail it to your CISO, run this at your
-> terminal:
->
-> ```bash
-> navi action mail --to "ciso@company.com" --file "bytag_export.csv"
-> ```
-
-Claude does not try to invoke mail through any tool and does not batch the
-mail step silently into a sequence.
+Compose with `navi_export` (produce the CSV) or `navi_action_encrypt` (secure a
+sensitive attachment first, mail the `.enc`). The full harness — export→mail and
+encrypt→mail patterns, gating detail, and failure modes — lives in the
+**navi-mail** skill (`navi://skill/mail`).
 
 ---
 
@@ -404,7 +297,7 @@ A realistic recurring pattern that chains the navi_* tools with the CLI handoff
 | "cancel the running vuln export" | `navi_action_cancel(kind="vulns", uuid="<EXPORT_UUID>", confirm=True)` |
 | "encrypt this file" | `navi_action_encrypt(file="...")` |
 | "decrypt this file" | `navi_action_decrypt(file="...")` |
-| "run a command against tagged hosts" | **CLI:** loop the tag's IPs → `navi action push --target <IP> --command "..."` |
-| "remediate all OpenSSL / Log4j / \<package\> hosts" | Route → Tag (MCP) → Push (CLI) → Verify (MCP) cycle above |
-| "email this report" | **CLI:** `navi action mail --to ... --file ...` |
+| "run a command against tagged hosts" | Read the tag's IPs → loop `navi_action_push(target="<IP>", command="...", confirm=True)` (see navi-remote-exec) |
+| "remediate all OpenSSL / Log4j / \<package\> hosts" | Route → Tag → Push → Verify cycle (all MCP; see navi-remote-exec) |
+| "email this report" | `navi_action_mail(to="...", file="...", confirm=True)` (see navi-mail) |
 | "run the operational hygiene routine" | Three-phase workflow above |

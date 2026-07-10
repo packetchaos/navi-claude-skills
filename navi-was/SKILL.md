@@ -178,12 +178,13 @@ WHERE a.name = 'MyApp' ORDER BY f.severity;
 
 Bridge WAS findings into TVM asset tags using `apps.uuid` in the `query`
 argument. All tag writes are write-gated — narrate and confirm before
-calling. Use `remove=True` on health/risk tags so they always reflect
-current WAS scan state.
+calling. For health/risk tags that should reflect current WAS scan state,
+refresh accurately with the two-step ephemeral pattern (clear → wait → re-apply);
+see navi-enrich.
 
 **Tag all assets with critical WAS findings:**
 
-`navi_enrich_tag(category="WAS Risk", value="Critical", query="SELECT uuid FROM apps WHERE critical_count > 0;", remove=True, confirm=True)`
+`navi_enrich_tag(category="WAS Risk", value="Critical", query="SELECT uuid FROM apps WHERE critical_count > 0;", confirm=True)`
 
 ```bash
 navi enrich tag --c "WAS Risk" --v "Critical" \

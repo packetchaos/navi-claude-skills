@@ -227,8 +227,11 @@ navi enrich tag --c "Child" --v "Val" --cc "Parent" --cv "Val" -all
 ### Special modes
 
 - `tone=True` — create a TONE tag (Tenable One Exposure) instead of a TVM tag
-- `remove=True` — clear tag from all assets first, then re-apply (ephemeral
-  pattern — see below)
+- `remove=True` — CLEAR the tag from all assets it currently carries (ignores
+  any selector). For an accurate ephemeral refresh, run it alone, wait ~30 min,
+  then re-apply the selector in a separate call with no remove. Combining
+  remove with a selector in one call is allowed but only adds/updates against
+  current membership (the tool flags it) — see the ephemeral pattern in SKILL.md.
 - `description="text"` — add a description to the tag
 
 ---

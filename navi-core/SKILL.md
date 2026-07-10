@@ -28,7 +28,9 @@ Exploration, Action, Exportation.
 - `navi-explore` — `explore data` and `explore info` full reference
 - `navi-export` — all CSV export commands
 - `navi-scan` — scan creation, control, evaluate
-- `navi-action` — delete, rotate, cancel, encrypt/decrypt; plus push and mail (CLI-only)
+- `navi-action` — delete, rotate, cancel, encrypt/decrypt
+- `navi-mail` — `navi_action_mail`, email harness (double-gated: `NAVI_EMAIL`)
+- `navi-remote-exec` — `navi_action_push`, remote-exec harness (double-gated: `NAVI_REMOTE_CODE_EXECUTION`)
 - `navi-was` — WAS integration
 
 This skill has two setup paths. Read whichever matches your situation:

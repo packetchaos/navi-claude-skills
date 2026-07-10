@@ -315,15 +315,18 @@ Assets with credential failures (often a cause of cascading timeouts):
 
 `navi_explore_data(subcommand="creds")`
 
-Tag slow assets for follow-up (ephemeral, auto-refreshes):
+Tag slow assets for follow-up (ephemeral):
 
-`navi_enrich_tag(category="Scan Health", value="Slow Scan", scantime=10, remove=True, confirm=True)`
+`navi_enrich_tag(category="Scan Health", value="Slow Scan", scantime=10, confirm=True)`
 
 Tag cred-failure assets for follow-up:
 
-`navi_enrich_tag(category="Scan Health", value="Cred Failure", plugin=104410, remove=True, confirm=True)`
+`navi_enrich_tag(category="Scan Health", value="Cred Failure", plugin=104410, confirm=True)`
 
-See navi-enrich for the full ephemeral tagging pattern.
+These are ephemeral health tags — for an accurate refresh, clear first
+(`remove=True`, no selector) → wait ~30 min → re-apply as above. See navi-enrich
+for the full pattern (and why the one-call `remove=True`+selector form only
+adds/updates rather than cleanly refreshing).
 
 **Trigger phrases:** "evaluate scan X", "why is scan X slow", "analyze
 scanner performance", "is my scanner load balanced", "what's the

@@ -114,96 +114,124 @@ Common real-world tagging goals → the selector to reach for:
 - **User access / offboarding** (which assets a local user can reach): `query=`
   on the local-user enumeration plugins (95928 Linux / 71246 Windows), matching
   the username in plugin output.
-- **CISA KEV** (actively-exploited): `xrefs="CISA"`, refreshed as an
-  **ephemeral** tag (`remove=True`) on each KEV release.
+- **CISA KEV** (actively-exploited): `xrefs="CISA"`, kept **ephemeral** — on
+  each KEV release, refresh accurately via clear (`remove=True`) → wait →
+  re-apply. See the ephemeral pattern below.
 - **Bulk by CVE from an external CSV** (e.g. MITRE ATT&CK→CVE): the `cve=`
   selector in a download→parse→loop — worked example in
   **`references/tag-by-cve-external-csv.md`** (`navi://skill/enrich/tag-by-cve-external-csv`).
 - **Slow-to-scan assets**: `scantime=<minutes>` (e.g. "Long Scan Times").
 
-## The `remove=True` ephemeral tagging pattern
+## The `remove=True` ephemeral tagging pattern (TWO STEPS)
 
-**The problem**: without `remove=True`, tags accumulate. Fixed assets stay
-tagged. A credential failure tag run twice = 12 tagged on Monday, 8 fixed
+**The problem**: without refreshing, tags accumulate. Fixed assets stay
+tagged. A credential-failure tag run twice = 12 tagged on Monday, 8 fixed
 Tuesday, still 12 tagged.
 
-**The solution**: `remove=True` clears all assets with this tag before
-re-applying. Result: tag always reflects current reality.
+**What `remove=True` actually does**: it is a **CLEAR**, not a reassignment.
+navi's `-remove` looks up the tag's UUID and strips the tag from **every
+asset currently carrying it** — and it **ignores any selector** you pass.
+It does not "replace old membership with new" in a single call.
 
-### Tag UUID preservation — why `remove=True` matters beyond cleanup
+### The most accurate refresh is TWO calls with a wait between them
 
-`remove=True` keeps the existing tag UUID intact. It only reassigns which
-assets carry the tag; the tag itself is the same object each run.
+This two-step is the pattern that keeps the tag as accurate as possible. It's
+the recommended default for a true refresh — but it's a **choice**, not a hard
+rule: when the difference is moot (first-time creation, or you deliberately just
+want to add/update the current set), a single selector call — or even a combined
+`remove=True` + selector call — is fine.
 
-This matters because **access groups, API integrations, saved dashboards,
-and external automation often reference tags by UUID**. Deleting a tag
-and recreating it — even with the same category and value — generates a
-NEW UUID and silently breaks every downstream reference.
+1. **Clear** — `remove=True`, no selector:
 
-The correct pattern for any "refresh this tag's membership" workflow is:
+   `navi_enrich_tag(category="Scan Health", value="Cred Failure", remove=True, confirm=True)`
 
-- Same `category`, same `value`
-- Updated `query` (or whatever selector) to reflect current conditions
-- `remove=True` to replace the old asset membership with the new
+2. **Wait ~30 minutes** for the removal to propagate.
+
+3. **Re-apply** — same `category`/`value`, the selector, **no `remove`**:
+
+   `navi_enrich_tag(category="Scan Health", value="Cred Failure", plugin=104410, confirm=True)`
+
+> **Avoid combining them in one call.** `navi_enrich_tag(..., plugin=104410,
+> remove=True)` is allowed but the tool returns a `_warning`. In navi, the
+> selector adds and `-remove` strips as two independent jobs in the same
+> command — so it only adds/updates against the tag's *current* membership
+> rather than doing a clean refresh, and can strip assets that should have
+> stayed tagged. It's not forbidden (sometimes an add-before-remove is what you
+> want), just flagged as potentially inaccurate. Splitting into clear → wait →
+> re-apply is the accurate refresh; surface the warning to the user if you do
+> combine them.
+
+### Tag UUID preservation — why the two-step matters
+
+Both steps target the same `category` + `value`, so the tag's **UUID stays
+intact** across the refresh. This matters because **access groups, API
+integrations, saved dashboards, and external automation reference tags by
+UUID**. Deleting a tag and recreating it — even with the same category and
+value — generates a NEW UUID and silently breaks every downstream reference.
 
 Do NOT use `navi_action_delete(kind="tag", ...)` followed by a fresh
-`navi_enrich_tag(...)` to "rotate" a tag's contents. That's the
-UUID-breaking pattern. Use `remove=True` alone.
+`navi_enrich_tag(...)` to "rotate" a tag's contents. That's the UUID-breaking
+pattern. Use the clear → wait → re-apply cycle instead.
 
-### Always use `remove=True` for operational health tags
+### Operational health tags — the re-apply selectors
 
-Cred failure tag:
+Each of these is the **re-apply (step 3)** call. Precede it with a step-1
+clear of the same `category`/`value` (`remove=True`, no selector) and a
+~30-minute wait whenever you're refreshing an existing tag.
 
-`navi_enrich_tag(category="Scan Health", value="Cred Failure", plugin=104410, remove=True, confirm=True)`
+Cred failure: `navi_enrich_tag(category="Scan Health", value="Cred Failure", plugin=104410, confirm=True)`
 
-Auth issue tag:
+Auth issue: `navi_enrich_tag(category="Scan Health", value="Auth Issue", plugin=21745, confirm=True)`
 
-`navi_enrich_tag(category="Scan Health", value="Auth Issue", plugin=21745, remove=True, confirm=True)`
+Slow scan: `navi_enrich_tag(category="Scan Health", value="Slow Scan", scantime=30, confirm=True)`
 
-Slow scan tag:
+Reboot required: `navi_enrich_tag(category="Remediation", value="Reboot Required", plugin=35453, confirm=True)`
 
-`navi_enrich_tag(category="Scan Health", value="Slow Scan", scantime=30, remove=True, confirm=True)`
+CISA KEV: `navi_enrich_tag(category="CISA", value="KEV", xrefs="CISA", confirm=True)`
 
-Reboot required:
-
-`navi_enrich_tag(category="Remediation", value="Reboot Required", plugin=35453, remove=True, confirm=True)`
-
-CISA KEV:
-
-`navi_enrich_tag(category="CISA", value="KEV", xrefs="CISA", remove=True, confirm=True)`
-
-Upcoming cert expiry (stable value, rotating query):
-
-`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Apr%2026%';", remove=True, confirm=True)`
+Cert expiry (stable value, rotating query): `navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Apr%2026%';", confirm=True)`
 
 ### Monthly cert expiry rotation — the right way
 
-Use a stable tag value and rotate only the query. Downstream references
-to `CertExpiry:ExpiringSoon` keep working across rotations because the
-UUID never changes.
+Use a stable tag value and rotate only the query; the UUID never changes so
+downstream references to `CertExpiry:ExpiringSoon` keep working. Each month:
+clear the tag (step 1), wait ~30 min, then re-apply with the new month's query
+(step 3).
 
-This month:
+Step 1 (clear): `navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", remove=True, confirm=True)`
 
-`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'May%2026%';", remove=True, confirm=True)`
+Step 3 this month: `navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'May%2026%';", confirm=True)`
 
-Next month — same tag, new query:
-
-`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Jun%2026%';", remove=True, confirm=True)`
+Step 3 next month — same tag, new query: `navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Jun%2026%';", confirm=True)`
 
 Month patterns: `Jan%2026%`, `Feb%2026%`, `Mar%2026%`, ..., `Dec%2026%`.
 
-For a "certs expiring in the next N days" rotation that doesn't need
-month boundaries:
+For a "certs expiring in the next N days" rotation that doesn't need month
+boundaries (still clear → wait → re-apply):
 
-`navi_enrich_tag(category="CertExpiry", value="Next60Days", query="SELECT asset_uuid FROM certs WHERE date(not_valid_after) <= date('now', '+60 days') AND date(not_valid_after) >= date('now');", remove=True, confirm=True)`
+`navi_enrich_tag(category="CertExpiry", value="Next60Days", query="SELECT asset_uuid FROM certs WHERE date(not_valid_after) <= date('now', '+60 days') AND date(not_valid_after) >= date('now');", confirm=True)`
 
-**Do NOT use `remove=True`** for stable classifications (Environment, OS,
-Route) — these accumulate correctly and represent permanent context, not
-point-in-time state.
+### When do you actually need the clear step?
 
-**Trigger for `remove=True` suggestion**: user says "assets are still
-tagged after we fixed them," "the tag is stale," "I deleted the tag and
-now my access group is broken," or "how do I refresh a tag."
+Think of it as a spectrum of how fast the tagged fact changes:
+
+- **Fast-changing / point-in-time state** (cred failures, "reboot required",
+  "cert expiring this month") — refresh often, and the clear → wait → re-apply
+  keeps it accurate. This is where `remove=True` earns its keep.
+- **Stable / slow-changing classifications** (Environment, OS, Route, or a
+  hardware tag like `Hardware:iDRAC`) — assets that match tend to keep matching
+  for months or years. New assets joining just get **added** on the next
+  selector run; almost nothing needs removing. You can go a long time — often
+  indefinitely — without ever running the clear step. Running it here is
+  usually wasted effort (and a needless 30-min propagation wait).
+
+So the clear step is a tool for churn, not a ritual. Match it to how volatile
+the underlying condition is. First-time creation of any tag also needs no clear
+(there's nothing to clear yet) — just the selector call.
+
+**Trigger for the ephemeral refresh**: user says "assets are still tagged
+after we fixed them," "the tag is stale," "I deleted the tag and now my access
+group is broken," or "how do I refresh a tag."
 
 ---
 
@@ -213,13 +241,17 @@ Check count first:
 
 `navi_explore_query(sql="SELECT count(uuid) FROM assets;")`
 
+These are the **re-apply (selector)** calls. For an accurate refresh of an
+existing tag, precede each with a step-1 clear (`remove=True`, no selector) and
+a ~30-min wait; on first creation the clear is unnecessary.
+
 **PATH A — under 50K (plugin regex):**
 
-`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", plugin=10863, plugin_regexp="Not After\s*:\s*Apr\s+\d{1,2}\s+[\d:]+\s+2026", remove=True, confirm=True)`
+`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", plugin=10863, plugin_regexp="Not After\s*:\s*Apr\s+\d{1,2}\s+[\d:]+\s+2026", confirm=True)`
 
 ```bash
 navi enrich tag --c "CertExpiry" --v "ExpiringSoon" \
-  --plugin 10863 -regexp "Not After\s*:\s*Apr\s+\d{1,2}\s+[\d:]+\s+2026" -remove
+  --plugin 10863 -regexp "Not After\s*:\s*Apr\s+\d{1,2}\s+[\d:]+\s+2026"
 ```
 
 **PATH B — over 50K (certs table — much faster):**
@@ -228,16 +260,16 @@ First populate the certs table: `navi_config_update(kind="certificates")`
 
 Then:
 
-`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Apr%2026%';", remove=True, confirm=True)`
+`navi_enrich_tag(category="CertExpiry", value="ExpiringSoon", query="SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Apr%2026%';", confirm=True)`
 
 ```bash
 navi enrich tag --c "CertExpiry" --v "ExpiringSoon" \
-  --query "SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Apr%2026%';" -remove
+  --query "SELECT asset_uuid FROM certs WHERE not_valid_after LIKE 'Apr%2026%';"
 ```
 
-Both PATH A and PATH B use `remove=True` and a stable value
-(`ExpiringSoon`) so the tag UUID is preserved across monthly rotations.
-See "Monthly cert expiry rotation" above.
+Both PATH A and PATH B use a stable value (`ExpiringSoon`), so the tag UUID is
+preserved across monthly rotations. See "Monthly cert expiry rotation" above
+for the clear → wait → re-apply cycle.
 
 Month patterns: `Jan%2026%`, `Feb%2026%`, `Mar%2026%`, etc.
 

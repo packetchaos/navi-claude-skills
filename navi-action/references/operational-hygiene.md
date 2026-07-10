@@ -1,8 +1,8 @@
 # navi-action reference — operational hygiene workflow
 
-A realistic recurring end-to-end pattern that exercises the navi_* tools and
-the CLI handoff (push/mail) together, plus the rationale for the three-phase
-split. Loaded on demand; the per-command detail is in SKILL.md.
+A realistic recurring end-to-end pattern that exercises the navi_* tools —
+including the double-gated `navi_action_mail` — plus the rationale for the
+phased split. Loaded on demand; the per-command detail is in SKILL.md.
 
 ## Operational hygiene workflow
 
@@ -55,15 +55,17 @@ Or a more targeted export:
 
 - `navi_export(subcommand="query", sql="SELECT asset_ip, plugin_name, severity, last_found FROM vulns WHERE severity='critical' AND last_found < date('now', '-30 days');")`
 
-**Phase 3 (CLI, at your terminal) — deliver the report:**
+**Phase 3 (MCP, with Claude) — deliver the report:**
 
-```bash
-navi action mail --to "security-team@company.com" \
-  --subject "Weekly SLA Breach Report" --file "failures_export.csv"
-```
+Email is a tool now, but double-gated — it runs only if the server has
+`NAVI_MCP_ALLOW_WRITES=1` + `NAVI_EMAIL=1`, and Claude narrates + gets
+`confirm=True` first:
 
-Or encrypt first if the report contains sensitive data (compose with
-`navi_action_encrypt` in Phase 2, then mail the `.enc` file in Phase 3).
+- `navi_action_mail(to="security-team@company.com", subject="Weekly SLA Breach Report", file="failures_export.csv", confirm=True)`
+
+For sensitive reports, encrypt in Phase 2 (`navi_action_encrypt`) and mail the
+`.enc` file here. If `NAVI_EMAIL` isn't enabled on the server, the tool blocks —
+fall back to `navi action mail ...` at the terminal.
 
 ### Why the three-phase split
 
@@ -76,9 +78,11 @@ Each phase is deliberately in a different place:
 - **Phase 2** is through MCP because tagging and export benefit from
   Claude's narration, write-gate confirmation, and the ability to adjust
   in-session if something looks off.
-- **Phase 3** is on your terminal because email delivery should be a
-  deliberate human-initiated action, not something an LLM fires off.
+- **Phase 3** runs through MCP now, but email delivery is deliberately
+  double-gated (`NAVI_EMAIL` on top of writes) and confirmed per-send, so it
+  stays an explicit, human-approved action rather than something fired off
+  silently.
 
-Schedule Phase 1 and Phase 3 via cron or your scheduler of choice. Phase
-2 can be kicked off when you're next at the chat on your chosen cadence.
+Schedule Phase 1 via cron or your scheduler of choice. Phases 2 and 3 can be
+kicked off when you're next at the chat on your chosen cadence.
 

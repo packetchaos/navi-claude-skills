@@ -6,9 +6,12 @@ example. The lean list + handoff rule are in SKILL.md; load this when you need
 the detail.
 
 > **Now exposed (previously CLI-only):** `navi explore api` is now
-> `navi_explore_api` (GET free; POST/PUT write-gated), and `navi config
-> certificates` is now `navi_config(kind="certificates")`. They are no longer
-> in the not-exposed set below.
+> `navi_explore_api` (GET free; POST/PUT write-gated); `navi config
+> certificates` is now `navi_config(kind="certificates")`; and `navi action
+> mail` / `navi action push` are now `navi_action_mail` / `navi_action_push`,
+> each double-gated behind its own capability env var (`NAVI_EMAIL` /
+> `NAVI_REMOTE_CODE_EXECUTION`) on top of the write gate. They are no longer in
+> the not-exposed set below — see the navi-mail and navi-remote-exec skills.
 
 > **Targeted-sync 4-minute ceiling:** the host's ~4-min tool-call cap on long
 > `navi_config_update(kind="vulns")` syncs (and the `days=N` / `--threads 1`
@@ -19,66 +22,50 @@ the detail.
 The navi CLI has commands that are intentionally NOT wrapped as MCP tools.
 They fall into three categories, each with a different behavior from Claude.
 
-### Hazardous to automate — kept as CLI, recommended only when needed
+### Hazardous — exposed but double-gated
 
-These commands exist in navi, remain useful, but are deliberately kept out
-of the MCP tool surface so an LLM cannot drive them on the user's behalf.
-Claude explains them as CLI steps when a workflow naturally includes them.
-Claude does not try to invoke them through any tool.
+`navi action push` and `navi action mail` used to be kept off the tool surface
+entirely. They are now exposed as `navi_action_push` / `navi_action_mail`, but
+each requires a SECOND capability gate on top of the master write gate, plus
+per-call `confirm=True`:
 
-- **`navi action push`** — remote command execution against Linux hosts.
-  Used in the Route → Tag → Push → Verify remediation cycle.
-- **`navi action mail`** — email reports and files. Used as a chained step
-  after exports or evaluations.
+- **`navi_action_push`** — remote command execution against a single Linux host.
+  Needs `NAVI_MCP_ALLOW_WRITES=1` **and** `NAVI_REMOTE_CODE_EXECUTION=1`. No
+  `--tag` — one IP per call; loop per-IP for a group. Harness: navi-remote-exec.
+- **`navi_action_mail`** — email reports and files. Needs
+  `NAVI_MCP_ALLOW_WRITES=1` **and** `NAVI_EMAIL=1`. Harness: navi-mail.
 
-See navi-action for full CLI reference.
+The dedicated skills carry the full guidance; the rule here is only that both
+are real tools now, gated more tightly than the ordinary platform-write tools.
 
-**Pattern for MCP → CLI handoff:**
+**Worked example — Route → Tag → Push → Verify (all MCP now):**
 
-When the workflow crosses from MCP tools into a CLI-only command, Claude
-completes the MCP portion first, tells the user exactly what to run, and
-then resumes on the MCP side if there's a verification step afterward.
-
-**Worked example — Route → Tag → Push → Verify:**
-
-> Here's the full remediation cycle for Jenkins hosts. I'll drive the
-> tagging and verification through MCP tools; the push step is CLI-only,
-> so you'll run that part yourself.
+> Here's the full remediation cycle for Jenkins hosts, driven entirely through
+> MCP tools (push is a tool now, double-gated).
 >
-> **Step 1 (MCP) — build the route tag.** I'll query for every asset with a
-> vuln path containing "jenkins" and tag them with `Remediation:Jenkins-Q2`.
+> **Step 1 — build the route tag.** Query every asset with a vuln path
+> containing "jenkins" and tag them `Remediation:Jenkins-Q2`.
 >
-> Tool call: `navi_enrich_tag(category="Remediation", value="Jenkins-Q2",
+> `navi_enrich_tag(category="Remediation", value="Jenkins-Q2",
 > query="SELECT DISTINCT asset_uuid FROM vuln_paths WHERE path LIKE '%jenkins%';",
-> confirm=True)`
+> confirm=True)` — confirm to apply.
 >
-> Confirm to apply.
+> *[...after the 30-min propagation window...]*
 >
-> *[...after user confirms and tool runs...]*
+> **Step 2 — push the remediation.** push targets one IP, so read the tagged
+> hosts' IPs, narrate the full set + command, then call the tool once per IP
+> (each with confirm=True):
 >
-> **Step 2 (CLI) — run the remediation.** `navi action push` is not an MCP
-> tool, and it targets a single IP (`--target`, no `--tag`). Pull the tagged
-> hosts' IPs and loop. Run this at your terminal:
+> `navi_explore_query(sql="SELECT a.ip FROM tags t JOIN assets a ON t.asset_uuid=a.uuid WHERE t.tag_key='Remediation' AND t.tag_value='Jenkins-Q2';")`
+> then per IP:
+> `navi_action_push(target="<ip>", command="sudo apt-get upgrade jenkins -y", confirm=True)`
 >
-> ```bash
-> for ip in $(navi explore data query \
->   "SELECT a.asset_ip FROM tags t JOIN assets a ON t.asset_uuid=a.uuid \
->    WHERE t.tag_key='Remediation' AND t.tag_value='Jenkins-Q2';"); do
->   navi action push --target "$ip" --command "sudo apt-get upgrade jenkins -y"
-> done
-> ```
->
-> Wait for push to complete, then launch the verification scan. After that,
-> let me know and I'll kick off step 3 on the MCP side.
->
-> **Step 3 (MCP) — verify and clean up.** Once the remediation scan is done
-> and vulns are re-synced, I'll confirm the vulnerability is gone and
-> delete the temporary tag. Tell me when you're ready for that.
+> **Step 3 — verify and clean up.** After a re-scan and vuln re-sync, confirm
+> the finding is gone (`navi_explore_query(...)`) and retire the tag with
+> `navi_action_delete(kind="tag", category="Remediation", value="Jenkins-Q2", confirm=True)`.
 
-The important pattern: Claude does NOT try to orchestrate the CLI step
-silently, does NOT pretend to invoke `action push` through an MCP tool,
-and does NOT continue past the CLI step without user confirmation that
-the CLI portion completed.
+Each write and each push still gets its own narration and confirmation — the
+tools being available does not remove the per-call confirm step.
 
 ### Too heavy for a tool call — kept as CLI, actively encouraged
 
