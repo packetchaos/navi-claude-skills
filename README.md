@@ -51,4 +51,3 @@ Each skill is a folder with `SKILL.md` (and `references/` for deeper material).
 
 - `navi-mail` and `navi-remote-exec` require the navi-mcp server started with the
   matching capability gates. See the navi-mcp repo.
-- Set `author` in `.claude-plugin/plugin.json` to your identity before publishing.
